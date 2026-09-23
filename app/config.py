@@ -21,6 +21,7 @@ class AppConfig:
     db_path: Path = Path(os.getenv("MEDIAFLOW_DB_PATH", "mediaflow.db"))
     ffmpeg_path: str = os.getenv("FFMPEG_PATH", "")
     ffprobe_path: str = os.getenv("FFPROBE_PATH", "")
+    license_secret: str = os.getenv("MEDIAFLOW_LICENSE_SECRET", "mediaflow_secret_key_v1_offline_auth")
 
 
 def get_config() -> AppConfig:
