@@ -24,19 +24,41 @@ LOGO_DIR = PROJECT_ROOT / "assets" / "logo"
 def get_logo_image(size: int = 32) -> QImage:
     """Return an application logo QImage of the specified square size.
 
-    Loads assets/logo/logo.png if available; otherwise renders a clean,
-    antialiased monogram emblem for MediaFlow on a headless QImage.
+    Prioritizes vector assets/logo/logo.svg rendered with QSvgRenderer for
+    high-DPI fidelity, followed by raster files (png, ico, webp, jpg),
+    and falls back to an antialiased monogram emblem.
     """
-    png_path = LOGO_DIR / "logo.png"
-    if png_path.is_file() and png_path.stat().st_size > 0:
-        image = QImage(str(png_path))
-        if not image.isNull():
-            return image.scaled(
-                size,
-                size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+    # 1. Prioritize vector SVG logo
+    svg_path = LOGO_DIR / "logo.svg"
+    if svg_path.is_file() and svg_path.stat().st_size > 0:
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+
+            renderer = QSvgRenderer(str(svg_path))
+            if renderer.isValid():
+                image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                renderer.render(painter)
+                painter.end()
+                if not image.isNull():
+                    return image
+        except Exception:
+            pass
+
+    # 2. Check for standard raster images
+    for filename in ("logo.png", "logo.ico", "logo.webp", "logo.jpg"):
+        candidate = LOGO_DIR / filename
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            image = QImage(str(candidate))
+            if not image.isNull():
+                return image.scaled(
+                    size,
+                    size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
 
     # Render clean geometric monogram emblem using QImage
     image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
