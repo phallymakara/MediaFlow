@@ -70,10 +70,37 @@ mediaflow/
 - uv package manager
 - FFmpeg (installed and available in system PATH or configured via `.env`)
 
-## Setup
+### Platform-Specific Prerequisites
+
+#### Windows
+- Install FFmpeg via winget:
+  ```powershell
+  winget install Gyan.FFmpeg
+  ```
+- Install uv via PowerShell:
+  ```powershell
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+
+#### macOS
+- Install FFmpeg via Homebrew:
+  ```bash
+  brew install ffmpeg
+  ```
+- Install uv:
+  ```bash
+  brew install uv
+  ```
+  Or via official installer:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+## Setup and Installation
 
 1. Clone the repository and navigate to the project directory:
    ```bash
+   git clone https://github.com/phallymakara/MediaFlow.git
    cd MediaFlow
    ```
 
@@ -82,10 +109,15 @@ mediaflow/
    uv sync
    ```
 
-3. Copy the example configuration:
-   ```bash
-   cp .env.example .env
-   ```
+3. Configure environment settings:
+   - On macOS and Linux:
+     ```bash
+     cp .env.example .env
+     ```
+   - On Windows (PowerShell):
+     ```powershell
+     Copy-Item .env.example .env
+     ```
 
 4. Run the application:
    ```bash
@@ -96,3 +128,18 @@ mediaflow/
    ```bash
    uv run pytest
    ```
+
+## License Management Tools (Developer)
+
+Generate customer license keys using the standalone utilities:
+
+- CLI Generator:
+  ```bash
+  uv run python tools/keygen.py --days 30 --user "CustomerName"
+  uv run python tools/keygen.py --lifetime --tier pro
+  ```
+
+- GUI Generator:
+  ```bash
+  uv run python tools/keygen_gui.py
+  ```
