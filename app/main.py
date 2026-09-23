@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 from pathlib import Path
 import sys
 
@@ -10,7 +11,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtCore import Qt
+# Ensure Qt can locate platform plugins on Windows inside virtual environments
+try:
+    import PySide6
+
+    _pyside_dir = Path(PySide6.__file__).parent
+    _platforms_dir = _pyside_dir / "plugins" / "platforms"
+    if _platforms_dir.is_dir() and "QT_QPA_PLATFORM_PLUGIN_PATH" not in os.environ:
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(_platforms_dir)
+    _plugins_dir = _pyside_dir / "plugins"
+    if _plugins_dir.is_dir() and "QT_PLUGIN_PATH" not in os.environ:
+        os.environ["QT_PLUGIN_PATH"] = str(_plugins_dir)
+except Exception:
+    pass
+
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -117,6 +132,9 @@ def main() -> None:
 
     # Initialize Qt GUI application
     app = QApplication(sys.argv)
+    if "QT_PLUGIN_PATH" in os.environ:
+        QCoreApplication.addLibraryPath(os.environ["QT_PLUGIN_PATH"])
+
     app.setApplicationName("MediaFlow")
     app.setOrganizationName("Proseth")
     app.setWindowIcon(QIcon(get_logo_pixmap(size=32)))
