@@ -12,6 +12,7 @@ import httpx
 from app.core.media import MediaEpisode, MediaFormat, MediaInfo
 from app.extractors.base import BaseExtractor, ExtractionError
 from app.services.metadata import MetadataService
+from app.services.network import redact_url_for_logging, validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +67,25 @@ class BaseDramaExtractor(BaseExtractor):
             ExtractionError: If network request fails or returns an error status.
         """
         try:
+            validated_url = validate_outbound_url(url)
             req_headers = headers or DEFAULT_HEADERS
-            response = self._client.get(url, headers=req_headers)
+            response = self._client.get(validated_url, headers=req_headers)
             response.raise_for_status()
             return response.text
+        except ValueError as exc:
+            logger.warning("Blocked outbound request to unsafe URL: %s", exc)
+            raise ExtractionError(f"Cannot request target URL: {exc}") from exc
         except httpx.HTTPStatusError as exc:
-            logger.warning("HTTP error %s fetching %s", exc.response.status_code, url)
+            safe_url = redact_url_for_logging(url)
+            logger.warning("HTTP error %s fetching %s", exc.response.status_code, safe_url)
             if exc.response.status_code == 404:
                 raise ExtractionError("Drama page not found.") from exc
             elif exc.response.status_code in (401, 403):
                 raise ExtractionError("Access to this drama is restricted.") from exc
             raise ExtractionError(f"Server returned status {exc.response.status_code}.") from exc
         except (httpx.RequestError, Exception) as exc:
-            logger.error("Failed to connect to %s: %s", url, exc)
+            safe_url = redact_url_for_logging(url)
+            logger.error("Failed to connect to %s: %s", safe_url, exc)
             raise ExtractionError("Network connection failed while reaching drama source.") from exc
 
     def extract_metadata(self, html_content: str) -> Dict[str, str]:
@@ -427,7 +434,8 @@ class BaseDramaExtractor(BaseExtractor):
             if clean_original_url == mirror_url.lower():
                 continue
 
-            logger.info("Querying mirror fallback for %s at %s", target_id, mirror_url)
+            safe_mirror_url = redact_url_for_logging(mirror_url)
+            logger.info("Querying mirror fallback for %s at %s", target_id, safe_mirror_url)
             try:
                 mirror_html = self.fetch_html(mirror_url, headers=DEFAULT_HEADERS)
                 mirror_meta = self.extract_metadata(mirror_html)
@@ -443,7 +451,7 @@ class BaseDramaExtractor(BaseExtractor):
                 if has_real_streams or episodes:
                     logger.info(
                         "Mirror resolution succeeded via %s: %d formats, %d episodes discovered.",
-                        mirror_url,
+                        safe_mirror_url,
                         len(formats),
                         len(episodes),
                     )

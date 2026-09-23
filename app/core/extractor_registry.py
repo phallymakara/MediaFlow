@@ -13,6 +13,7 @@ from app.extractors.goodshort import GoodShortExtractor
 from app.extractors.netshort import NetShortExtractor
 from app.extractors.stardusttv import StardustTVExtractor
 from app.extractors.ytdlp import YtDlpExtractor
+from app.services.network import redact_url_for_logging, validate_outbound_url
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +81,24 @@ class ExtractorRegistry:
         Raises:
             ExtractionError: If no extractor matches or extraction fails.
         """
-        extractor = self.find_extractor(url)
+        try:
+            validated_url = validate_outbound_url(url)
+        except ValueError as exc:
+            logger.warning("Rejected unsafe URL: %s", exc)
+            raise ExtractionError(f"Cannot extract from unsafe URL: {exc}") from exc
+
+        extractor = self.find_extractor(validated_url)
+        safe_url = redact_url_for_logging(validated_url)
         if not extractor:
-            logger.warning("No matching extractor found for URL: %s", url)
+            logger.warning("No matching extractor found for URL: %s", safe_url)
             raise ExtractionError("No suitable extractor found for this URL.")
 
         logger.info(
             "Extracting media using '%s' for URL: %s",
             extractor.platform_name,
-            url,
+            safe_url,
         )
-        return extractor.extract(url)
+        return extractor.extract(validated_url)
 
     def supported_platforms(self) -> List[str]:
         """Return distinct names of registered platforms.

@@ -13,6 +13,7 @@ from app.core.tasks import DownloadTask
 from app.database.models import DownloadRecord, DownloadStatus
 from app.database.repository import DownloadRepository
 from app.services.ffmpeg import FFmpegService
+from app.services.network import redact_url_for_logging, validate_outbound_url
 from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class Downloader:
     ) -> None:
         """Initialize download manager with services and worker pool."""
         config = get_config()
-        self.max_concurrent = max(1, max_concurrent or config.max_concurrent_downloads)
+        self.max_concurrent = max(1, min(int(max_concurrent or config.max_concurrent_downloads), 20))
         self.storage = storage_service or StorageService()
         self.ffmpeg = ffmpeg_service
         self.repo = repository
@@ -72,11 +73,13 @@ class Downloader:
         Returns:
             The created and queued DownloadTask instance.
         """
+        validate_outbound_url(url)
         task_id = str(uuid.uuid4())
 
         # Determine target file path if not explicitly provided
         if output_path is None:
-            clean_filename = f"{title}.mp4"
+            safe_title = self.storage.sanitize_filename(title) or "media"
+            clean_filename = f"{safe_title}.mp4"
             dest_candidate = self.storage.get_destination_path(clean_filename)
             output_path = self.storage.get_unique_destination_path(dest_candidate)
 
@@ -122,7 +125,12 @@ class Downloader:
         )
 
         self._executor.submit(worker.execute)
-        logger.info("Queued download task %s for '%s'", task_id, title)
+        logger.info(
+            "Queued download task %s for '%s' (url=%s)",
+            task_id,
+            title,
+            redact_url_for_logging(url),
+        )
         return task
 
     def cancel(self, task_id: str) -> bool:
@@ -164,9 +172,9 @@ class Downloader:
         """Dynamically update maximum concurrent worker pool capacity.
 
         Args:
-            limit: New maximum concurrent tasks (minimum 1).
+            limit: New maximum concurrent tasks (clamped between 1 and 20).
         """
-        self.max_concurrent = max(1, limit)
+        self.max_concurrent = max(1, min(int(limit), 20))
         old_executor = self._executor
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_concurrent,

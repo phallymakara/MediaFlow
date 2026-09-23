@@ -62,7 +62,10 @@ class LicenseService:
         """
         self._repo = settings_repo
         config = get_config()
-        self._secret = (secret_key or config.license_secret).encode("utf-8")
+        raw_key = secret_key or config.license_secret
+        if len(raw_key) < 16:
+            raise ValueError("License secret key must be at least 16 characters long.")
+        self._secret = raw_key.encode("utf-8")
 
     @classmethod
     def generate_key(
@@ -273,8 +276,8 @@ class LicenseService:
         if last_check_iso:
             try:
                 last_check = datetime.fromisoformat(last_check_iso)
-                # If current time is more than 5 minutes before last recorded check
-                if (last_check - now_utc).total_seconds() > 300:
+                # If current time is more than 60 seconds before last recorded check
+                if (last_check - now_utc).total_seconds() > 60:
                     logger.warning(
                         "System clock rollback detected. Current: %s, Last check: %s",
                         now_utc.isoformat(),

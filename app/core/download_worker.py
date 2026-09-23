@@ -9,10 +9,12 @@ from typing import Optional
 import httpx
 import yt_dlp
 
+from app.config import get_config
 from app.core.tasks import DownloadTask
 from app.database.models import DownloadStatus
 from app.database.repository import DownloadRepository
 from app.services.ffmpeg import FFmpegService
+from app.services.network import redact_url_for_logging, validate_outbound_url
 from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,12 @@ class DownloadWorker:
             self._handle_cancellation(None)
             return None
 
+        try:
+            validate_outbound_url(self.task.url)
+        except Exception as exc:
+            self._handle_failure(None, exc)
+            return None
+
         self.task.set_status(DownloadStatus.DOWNLOADING)
         self._sync_db_status()
 
@@ -106,14 +114,23 @@ class DownloadWorker:
     def _download_direct_stream(self, temp_path: Path) -> None:
         """Stream direct media file to disk in chunks with cancellation support."""
         logger.debug("Streaming direct media for task %s to %s", self.task.task_id, temp_path)
+        config = get_config()
+        max_bytes = config.max_download_bytes
 
         with self._client.stream("GET", self.task.url) as response:
             response.raise_for_status()
+
+            content_type = response.headers.get("content-type", "").lower()
+            disallowed_types = ("text/html", "application/json", "application/javascript", "text/javascript")
+            if any(content_type.startswith(dt) for dt in disallowed_types):
+                raise ValueError("Response is not a valid media stream.")
 
             total_bytes = 0
             content_length = response.headers.get("content-length")
             if content_length and content_length.isdigit():
                 total_bytes = int(content_length)
+                if total_bytes > max_bytes:
+                    raise ValueError("File size exceeds maximum allowed download limit.")
 
             downloaded = 0
             start_time = time.time()
@@ -125,8 +142,11 @@ class DownloadWorker:
                         raise DownloadCancelledException()
 
                     if chunk:
-                        f.write(chunk)
                         downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise ValueError("File size exceeded maximum allowed download limit.")
+
+                        f.write(chunk)
 
                         elapsed = max(0.001, time.time() - start_time)
                         speed = downloaded / elapsed
@@ -150,6 +170,7 @@ class DownloadWorker:
     def _download_ytdlp(self, temp_path: Path) -> None:
         """Execute download using yt-dlp with live progress hook and cancellation checks."""
         logger.debug("Downloading via yt-dlp for task %s to %s", self.task.task_id, temp_path)
+        config = get_config()
 
         # Output template matching temporary path without yt-dlp auto-extension
         outtmpl = str(temp_path.with_suffix("")) + ".%(ext)s"
@@ -171,6 +192,9 @@ class DownloadWorker:
                     eta=eta,
                 )
 
+            elif d.get("status") == "error":
+                raise ValueError("Download failed during stream extraction.")
+
         selected_format = self.task.format_id or "bestvideo+bestaudio/best"
         ydl_opts = {
             "outtmpl": outtmpl,
@@ -179,6 +203,7 @@ class DownloadWorker:
             "quiet": True,
             "no_warnings": True,
             "socket_timeout": 15,
+            "max_filesize": config.max_download_bytes,
         }
 
         # If custom ffmpeg path exists, provide to yt-dlp
@@ -212,7 +237,12 @@ class DownloadWorker:
 
     def _handle_failure(self, temp_path: Optional[Path], exc: Exception) -> None:
         """Clean up and record task failure with a safe user-facing message."""
-        logger.error("Download failed for task %s: %s", self.task.task_id, exc)
+        logger.error(
+            "Download failed for task %s (url=%s): %s",
+            self.task.task_id,
+            redact_url_for_logging(self.task.url),
+            exc,
+        )
         if temp_path and temp_path.exists():
             try:
                 temp_path.unlink()
@@ -222,6 +252,8 @@ class DownloadWorker:
         error_message = "Download failed due to a network or connection issue."
         if isinstance(exc, httpx.HTTPStatusError):
             error_message = f"Server returned error code {exc.response.status_code}."
+        elif isinstance(exc, ValueError):
+            error_message = str(exc)
 
         self.task.set_status(DownloadStatus.FAILED, error_message=error_message)
         self._sync_db_status()
