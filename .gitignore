@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Configuration and Secrets
+.env
+*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Qt / PySide compiled files
+*.pyc
+ui_*.py
+rc_*.py
+
+# FFmpeg binaries if placed locally
+/bin/
+/ffmpeg/
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build and Distribution
+dist/
+build/
+*.spec
+*.egg-info/
+
+# IDE and OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+# Downloads and temporary files
+downloads/
+*.temp
