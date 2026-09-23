@@ -7,10 +7,11 @@ import httpx
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QImage
 
-from app.core.extractor_registry import ExtractorRegistry
+from app.core.extractor_registry import ExtractorRegistry, get_default_registry
 from app.core.media import MediaInfo
 from app.core.tasks import DownloadTask
 from app.database.models import DownloadStatus
+from app.extractors.base import ExtractionError
 from app.services.network import redact_url_for_logging, validate_outbound_url
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class AnalyzeWorker(QThread):
     """Background worker thread for asynchronous media extraction and metadata resolution."""
 
     analysis_started = Signal()
-    analysis_success = Signal(object)  # MediaMetadata
+    analysis_success = Signal(object)  # MediaInfo
     analysis_failed = Signal(str)
 
     def __init__(
@@ -38,7 +39,7 @@ class AnalyzeWorker(QThread):
         """
         super().__init__(parent)
         self.url = url.strip()
-        self.registry = extractor_registry or ExtractorRegistry()
+        self.registry = extractor_registry or get_default_registry()
 
     def run(self) -> None:
         """Execute URL validation and extraction on background thread."""
@@ -57,11 +58,16 @@ class AnalyzeWorker(QThread):
 
         try:
             logger.info("Starting background analysis for URL: %s", redact_url_for_logging(self.url))
-            metadata: MediaMetadata = self.registry.extract(self.url)
+            extract_fn = getattr(self.registry, "extract", None) or getattr(self.registry, "extract_info")
+            metadata: MediaInfo = extract_fn(self.url)
             self.analysis_success.emit(metadata)
+        except ExtractionError as ext_err:
+            logger.warning("Extraction failed for URL %s: %s", redact_url_for_logging(self.url), ext_err)
+            self.analysis_failed.emit(str(ext_err))
         except Exception as exc:
             logger.error("Analysis failed for URL %s: %s", redact_url_for_logging(self.url), exc)
             self.analysis_failed.emit("Unable to extract media from this URL. Please verify the link is accessible.")
+
 
 
 class DownloadSignalBridge(QObject):

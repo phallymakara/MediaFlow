@@ -100,6 +100,10 @@ class ExtractorRegistry:
         )
         return extractor.extract(validated_url)
 
+    # Alias for backwards compatibility with GUI workers and callers
+    extract = extract_info
+
+
     def supported_platforms(self) -> List[str]:
         """Return distinct names of registered platforms.
 

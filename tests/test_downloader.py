@@ -205,3 +205,20 @@ def test_downloader_concurrency_adjustment(tmp_path: Path) -> None:
 
     downloader.shutdown(wait=False)
 
+
+def test_resolve_ytdlp_format() -> None:
+    """Verify format resolution mappings and resilient fallbacks."""
+    from app.core.download_worker import resolve_ytdlp_format
+
+    assert resolve_ytdlp_format(None) == "bestvideo+bestaudio/best"
+    assert resolve_ytdlp_format("") == "bestvideo+bestaudio/best"
+    assert resolve_ytdlp_format("Best Quality (Auto)") == "bestvideo+bestaudio/best"
+    assert "1080" in resolve_ytdlp_format("1080p MP4")
+    assert "/bestvideo+bestaudio/best" in resolve_ytdlp_format("1080p MP4")
+    assert "720" in resolve_ytdlp_format("720p")
+    assert resolve_ytdlp_format("Audio Only (MP3)") == "bestaudio/best"
+    assert resolve_ytdlp_format("mp3") == "bestaudio/best"
+    # Complex existing selector preserved
+    assert resolve_ytdlp_format("bestvideo[height<=720]+bestaudio/best") == "bestvideo[height<=720]+bestaudio/best"
+
+

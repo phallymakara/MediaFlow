@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtCore import QEvent, QObject, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core.downloader import Downloader
-from app.core.extractor_registry import ExtractorRegistry
+from app.core.extractor_registry import ExtractorRegistry, get_default_registry
 from app.core.media import MediaEpisode, MediaInfo
 from app.core.tasks import DownloadTask
 from app.database.models import DownloadStatus
@@ -72,6 +73,26 @@ def format_eta(seconds: Optional[int]) -> str:
     return f"{hours}h {rem_minutes:02d}m"
 
 
+def format_speed_eta(bytes_per_sec: float, seconds: Optional[int]) -> str:
+    """Format speed and remaining ETA into a unified compact string.
+
+    Examples:
+        - "5.2 MB/s • 45s left"
+        - "850.0 KB/s • 1m 12s left"
+        - "2.1 MB/s" (if ETA is not yet computed)
+        - "--" (if speed is zero or inactive)
+    """
+    speed_str = format_speed(bytes_per_sec)
+    if speed_str == "--":
+        return "--"
+
+    eta_str = format_eta(seconds)
+    if eta_str == "--":
+        return speed_str
+
+    return f"{speed_str} • {eta_str} left"
+
+
 class DownloaderPage(QWidget):
     """Main downloader page hosting URL control bar, high-density task queue, and status strip."""
 
@@ -92,7 +113,8 @@ class DownloaderPage(QWidget):
         """
         super().__init__(parent)
         self.downloader = downloader or Downloader()
-        self.registry = extractor_registry or ExtractorRegistry()
+        self.registry = extractor_registry or get_default_registry()
+
         self.license_service = license_service or LicenseService()
 
         self._signal_bridge = DownloadSignalBridge()
@@ -154,7 +176,7 @@ class DownloaderPage(QWidget):
         # 2. Queue Header Toolbar
         queue_header = QHBoxLayout()
         self._queue_title = QLabel("Active Downloads (0 tasks)", self)
-        self._queue_title.setStyleSheet("font-size: 13px; font-weight: 600; color: #ffffff;")
+        self._queue_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLORS.text_primary};")
         queue_header.addWidget(self._queue_title)
         queue_header.addStretch()
 
@@ -166,26 +188,49 @@ class DownloaderPage(QWidget):
 
         # 3. Tabular Task Queue (QTableWidget)
         self._table = QTableWidget(self)
-        self._table.setColumnCount(8)
-        self._table.setHorizontalHeaderLabels([
-            "Name", "Platform", "Progress", "Size", "Speed", "ETA", "Status", "Actions"
-        ])
+        self._table.setColumnCount(6)
+        headers = ["Name", "Platform", "Progress", "Size", "Status", "Actions"]
+        self._table.setHorizontalHeaderLabels(headers)
+        header_tooltips = {
+            0: "Media name and title",
+            1: "Platform source",
+            2: "Download completion percentage and progress bar",
+            3: "Downloaded size / Total file size",
+            4: "Current task status",
+            5: "Task actions",
+        }
+        for col, tip in header_tooltips.items():
+            item = self._table.horizontalHeaderItem(col)
+            if item:
+                item.setToolTip(tip)
+
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setAlternatingRowColors(True)
+        self._table.setAlternatingRowColors(False)
+        self._table.setShowGrid(False)
+        self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._table.setMouseTracking(True)
+        self._table.viewport().setMouseTracking(True)
+        self._table.viewport().installEventFilter(self)
+        self._hovered_row: int = -1
+        self._table.setStyleSheet(
+            f"QTableWidget {{ background-color: {COLORS.bg_window}; border: 1px solid {COLORS.border_subtle}; border-radius: 6px; }}"
+            f"QTableWidget::item {{ background-color: {COLORS.bg_window}; color: {COLORS.text_primary}; }}"
+            f"QTableWidget::item:hover {{ background-color: {COLORS.bg_hover}; }}"
+            f"QTableWidget QWidget {{ background-color: transparent; }}"
+        )
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name stretches
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(1, 85)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(2, 170)
+        self._table.setColumnWidth(2, 160)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(7, 120)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(5, 110)
 
         layout.addWidget(self._table, 1)
 
@@ -321,6 +366,12 @@ class DownloaderPage(QWidget):
         self._table.insertRow(row)
         self._table.setRowHeight(row, 46)
 
+        # Initialize uniform dark background items for each column in this row
+        for c in range(self._table.columnCount()):
+            it = QTableWidgetItem()
+            it.setBackground(QColor(COLORS.bg_window))
+            self._table.setItem(row, c, it)
+
         task_id = task.task_id
         self._task_rows[task_id] = row
         self._row_tasks[row] = task_id
@@ -334,72 +385,70 @@ class DownloaderPage(QWidget):
 
         # 0: Name (Icon + Title)
         name_widget = QWidget()
+        name_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        name_widget.setStyleSheet("background: transparent;")
         name_layout = QHBoxLayout(name_widget)
         name_layout.setContentsMargins(8, 0, 8, 0)
         name_layout.setSpacing(8)
 
         icon_label = QLabel(name_widget)
+        icon_label.setStyleSheet("background: transparent;")
         icon_label.setPixmap(create_vector_icon("downloader", size=16).pixmap(16, 16))
         name_layout.addWidget(icon_label)
 
         title_label = QLabel(task.title, name_widget)
+        title_label.setStyleSheet(f"color: {COLORS.text_primary}; background: transparent;")
         title_label.setToolTip(task.title)
         name_layout.addWidget(title_label, 1)
         self._table.setCellWidget(row, 0, name_widget)
 
         # 1: Platform
         platform_label = QLabel(task.platform.title())
+        platform_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        platform_label.setStyleSheet(f"color: {COLORS.text_secondary}; background: transparent;")
         platform_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._table.setCellWidget(row, 1, platform_label)
 
-        # 2: Progress (Slim Bar + Percent)
+        # 2: Progress (Thicker Bar with centered percentage inside)
         progress_widget = QWidget()
+        progress_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        progress_widget.setStyleSheet("background: transparent;")
         progress_layout = QHBoxLayout(progress_widget)
         progress_layout.setContentsMargins(6, 0, 6, 0)
-        progress_layout.setSpacing(8)
+        progress_layout.setSpacing(0)
 
         pbar = QProgressBar(progress_widget)
         pbar.setRange(0, 100)
         pbar.setValue(0)
-        progress_layout.addWidget(pbar, 1)
-
-        pct_label = QLabel("0%", progress_widget)
-        pct_label.setFixedWidth(34)
-        pct_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        pct_label.setObjectName("captionText")
-        progress_layout.addWidget(pct_label)
+        pbar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pbar.setTextVisible(True)
+        progress_layout.addWidget(pbar)
 
         self._table.setCellWidget(row, 2, progress_widget)
 
         # 3: Size
         size_label = QLabel("-- / --")
+        size_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         size_label.setObjectName("captionText")
+        size_label.setStyleSheet(f"color: {COLORS.text_muted}; background: transparent;")
         self._table.setCellWidget(row, 3, size_label)
 
-        # 4: Speed
-        speed_label = QLabel("--")
-        speed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        speed_label.setObjectName("captionText")
-        self._table.setCellWidget(row, 4, speed_label)
-
-        # 5: ETA
-        eta_label = QLabel("--")
-        eta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        eta_label.setObjectName("captionText")
-        self._table.setCellWidget(row, 5, eta_label)
-
-        # 6: Status Badge
+        # 4: Status Badge
         badge = StatusBadge(status=task.status)
         badge_container = QWidget()
+        badge_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        badge_container.setStyleSheet("background: transparent;")
         b_layout = QHBoxLayout(badge_container)
         b_layout.setContentsMargins(4, 0, 4, 0)
         b_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         b_layout.addWidget(badge)
-        self._table.setCellWidget(row, 6, badge_container)
+        self._table.setCellWidget(row, 4, badge_container)
 
-        # 7: Action Button (Cancel)
+        # 5: Action Button (Cancel)
         action_widget = QWidget()
+        action_widget.installEventFilter(self)
+        action_widget.setStyleSheet("background: transparent;")
         action_layout = QHBoxLayout(action_widget)
         action_layout.setContentsMargins(4, 0, 4, 0)
         action_layout.setSpacing(4)
@@ -409,7 +458,7 @@ class DownloaderPage(QWidget):
         cancel_btn.clicked.connect(lambda checked=False, tid=task_id: self._on_cancel_task_clicked(tid))
         action_layout.addWidget(cancel_btn)
 
-        self._table.setCellWidget(row, 7, action_widget)
+        self._table.setCellWidget(row, 5, action_widget)
 
     def _on_progress_updated(
         self,
@@ -428,30 +477,17 @@ class DownloaderPage(QWidget):
         if task_id in self._task_data:
             self._task_data[task_id]["speed"] = speed
 
-        # Update Progress Bar & Percentage
+        # Update Progress Bar
         pwidget = self._table.cellWidget(row, 2)
         if pwidget:
             pbar = pwidget.findChild(QProgressBar)
-            pct_label = pwidget.findChild(QLabel)
             if pbar:
-                pbar.setValue(percent)
-            if pct_label:
-                pct_label.setText(f"{percent}%")
+                pbar.setValue(int(percent))
 
         # Update Size (e.g. 45.2 MB / 120.0 MB)
         size_widget = self._table.cellWidget(row, 3)
         if isinstance(size_widget, QLabel):
             size_widget.setText(f"{format_bytes(downloaded)} / {format_bytes(total)}")
-
-        # Update Speed
-        speed_widget = self._table.cellWidget(row, 4)
-        if isinstance(speed_widget, QLabel):
-            speed_widget.setText(format_speed(speed))
-
-        # Update ETA
-        eta_widget = self._table.cellWidget(row, 5)
-        if isinstance(eta_widget, QLabel):
-            eta_widget.setText(format_eta(eta))
 
         self._update_queue_summary()
 
@@ -465,22 +501,16 @@ class DownloaderPage(QWidget):
             self._task_data[task_id]["status"] = new_status
 
         # Update Status Badge
-        badge_container = self._table.cellWidget(row, 6)
+        badge_container = self._table.cellWidget(row, 4)
         if badge_container:
             badge = badge_container.findChild(StatusBadge)
             if badge:
                 badge.set_status(new_status)
 
-        # If failed, zero speed and ETA
+        # If failed, zero speed
         if new_status == DownloadStatus.FAILED.value:
             if task_id in self._task_data:
                 self._task_data[task_id]["speed"] = 0.0
-            spd_widget = self._table.cellWidget(row, 4)
-            if isinstance(spd_widget, QLabel):
-                spd_widget.setText("--")
-            eta_widget = self._table.cellWidget(row, 5)
-            if isinstance(eta_widget, QLabel):
-                eta_widget.setText("--")
 
         self._update_queue_summary()
 
@@ -504,16 +534,8 @@ class DownloaderPage(QWidget):
                 pbar.style().unpolish(pbar)
                 pbar.style().polish(pbar)
 
-        # Clear Speed & ETA
-        spd_widget = self._table.cellWidget(row, 4)
-        if isinstance(spd_widget, QLabel):
-            spd_widget.setText("--")
-        eta_widget = self._table.cellWidget(row, 5)
-        if isinstance(eta_widget, QLabel):
-            eta_widget.setText("--")
-
         # Replace Cancel button with Open Folder button
-        action_widget = self._table.cellWidget(row, 7)
+        action_widget = self._table.cellWidget(row, 5)
         if action_widget:
             layout = action_widget.layout()
             # Clear old buttons
@@ -575,3 +597,33 @@ class DownloaderPage(QWidget):
 
         total_speed = sum(d.get("speed", 0.0) for d in self._task_data.values() if d.get("status") == DownloadStatus.DOWNLOADING.value)
         self._speed_label.setText(f"Total Speed: {format_speed(total_speed)}")
+
+    def _set_row_hover(self, row: int, hovered: bool) -> None:
+        """Update row background color on mouse hover."""
+        if 0 <= row < self._table.rowCount():
+            color = QColor(COLORS.bg_hover) if hovered else QColor(COLORS.bg_window)
+            for c in range(self._table.columnCount()):
+                item = self._table.item(row, c)
+                if item:
+                    item.setBackground(color)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """Track mouse movement to smoothly highlight hovered rows."""
+        if obj == self._table.viewport() or isinstance(obj, QWidget):
+            if event.type() == QEvent.Type.MouseMove:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                if obj != self._table.viewport() and isinstance(obj, QWidget):
+                    pos = obj.mapTo(self._table.viewport(), pos)
+                row = self._table.rowAt(pos.y())
+                if row != self._hovered_row:
+                    if self._hovered_row >= 0:
+                        self._set_row_hover(self._hovered_row, False)
+                    self._hovered_row = row
+                    if self._hovered_row >= 0:
+                        self._set_row_hover(self._hovered_row, True)
+            elif event.type() == QEvent.Type.Leave:
+                if self._hovered_row >= 0:
+                    self._set_row_hover(self._hovered_row, False)
+                    self._hovered_row = -1
+        return super().eventFilter(obj, event)
+

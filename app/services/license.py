@@ -1,17 +1,22 @@
-"""License key verification and countdown management service."""
+"""License key verification, Ed25519 cryptography, and countdown management service."""
 
 import base64
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
 import hashlib
-import hmac
 import logging
+from pathlib import Path
 import re
-from typing import Optional
+from typing import Optional, Union
 
-from app.config import get_config
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+
+from app.config import DEFAULT_DEV_PRIVATE_KEY, DEFAULT_DEV_PUBLIC_KEY, get_config
 from app.database.repository import SettingsRepository
+from app.services.hardware import get_machine_id, verify_machine_id
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +42,81 @@ class LicenseInfo:
     hours_remaining: int = 0
     is_lifetime: bool = False
     tier: str = "standard"
+    hwid: Optional[str] = None
     license_key: Optional[str] = None
     message: str = ""
+
+
+def _load_public_key(key_input: Union[str, bytes, ed25519.Ed25519PublicKey]) -> ed25519.Ed25519PublicKey:
+    """Load an Ed25519 public key from Base64, PEM, raw bytes, seed, or an instance."""
+    if isinstance(key_input, ed25519.Ed25519PublicKey):
+        return key_input
+
+    if isinstance(key_input, str):
+        key_str = key_input.strip()
+        if Path(key_str).is_file():
+            key_bytes = Path(key_str).read_bytes()
+        elif "BEGIN PUBLIC KEY" in key_str:
+            return serialization.load_pem_public_key(key_str.encode("utf-8"))  # type: ignore[return-value]
+        else:
+            try:
+                decoded = base64.b64decode(key_str)
+                if len(decoded) == 32:
+                    key_bytes = decoded
+                else:
+                    seed = hashlib.sha256(key_str.encode("utf-8")).digest()
+                    return ed25519.Ed25519PrivateKey.from_private_bytes(seed).public_key()
+            except Exception:
+                seed = hashlib.sha256(key_str.encode("utf-8")).digest()
+                return ed25519.Ed25519PrivateKey.from_private_bytes(seed).public_key()
+    elif isinstance(key_input, bytes):
+        if len(key_input) == 32:
+            key_bytes = key_input
+        else:
+            seed = hashlib.sha256(key_input).digest()
+            return ed25519.Ed25519PrivateKey.from_private_bytes(seed).public_key()
+    else:
+        raise ValueError("Invalid public key type provided.")
+
+    if len(key_bytes) == 32:
+        return ed25519.Ed25519PublicKey.from_public_bytes(key_bytes)
+
+    return serialization.load_pem_public_key(key_bytes)  # type: ignore[return-value]
+
+
+def _load_private_key(key_input: Union[str, bytes, ed25519.Ed25519PrivateKey]) -> ed25519.Ed25519PrivateKey:
+    """Load an Ed25519 private key from Base64, PEM, raw bytes, seed, or an instance."""
+    if isinstance(key_input, ed25519.Ed25519PrivateKey):
+        return key_input
+
+    if isinstance(key_input, str):
+        key_str = key_input.strip()
+        if Path(key_str).is_file():
+            key_bytes = Path(key_str).read_bytes()
+        elif "BEGIN PRIVATE KEY" in key_str:
+            return serialization.load_pem_private_key(key_str.encode("utf-8"), password=None)  # type: ignore[return-value]
+        else:
+            try:
+                decoded = base64.b64decode(key_str)
+                if len(decoded) == 32:
+                    key_bytes = decoded
+                else:
+                    key_bytes = hashlib.sha256(key_str.encode("utf-8")).digest()
+            except Exception:
+                key_bytes = hashlib.sha256(key_str.encode("utf-8")).digest()
+    elif isinstance(key_input, bytes):
+        if len(key_input) == 32:
+            key_bytes = key_input
+        else:
+            key_bytes = hashlib.sha256(key_input).digest()
+    else:
+        raise ValueError("Invalid private key type provided.")
+
+    if len(key_bytes) == 32:
+        return ed25519.Ed25519PrivateKey.from_private_bytes(key_bytes)
+
+    return serialization.load_pem_private_key(key_bytes, password=None)  # type: ignore[return-value]
+
 
 
 class LicenseService:
@@ -52,58 +130,82 @@ class LicenseService:
     def __init__(
         self,
         settings_repo: Optional[SettingsRepository] = None,
+        public_key: Optional[Union[str, bytes, ed25519.Ed25519PublicKey]] = None,
         secret_key: Optional[str] = None,
+        current_hwid: Optional[str] = None,
     ) -> None:
-        """Initialize LicenseService with optional settings repository and secret key.
+        """Initialize LicenseService with repository and verification public key.
 
         Args:
             settings_repo: Repository for persisting license and check timestamps.
-            secret_key: Secret HMAC key used for signing and verification.
+            public_key: Ed25519 public key (Base64, PEM, or raw bytes).
+            secret_key: Legacy parameter alias for backwards compatibility.
+            current_hwid: Optional HWID override for testing.
         """
         self._repo = settings_repo
+        self._current_hwid = current_hwid
+
+        if secret_key is not None:
+            if len(secret_key) < 16:
+                raise ValueError("License secret key must be at least 16 characters long.")
+            self._secret = secret_key.encode("utf-8")
+        else:
+            self._secret = b""
+
         config = get_config()
-        raw_key = secret_key or config.license_secret
-        if len(raw_key) < 16:
-            raise ValueError("License secret key must be at least 16 characters long.")
-        self._secret = raw_key.encode("utf-8")
+        raw_key = public_key or secret_key or config.license_public_key or DEFAULT_DEV_PUBLIC_KEY
+        try:
+            self._public_key = _load_public_key(raw_key)
+        except Exception as exc:
+            logger.warning("Failed to load configured public key (%s), falling back to default.", exc)
+            self._public_key = _load_public_key(DEFAULT_DEV_PUBLIC_KEY)
 
     @classmethod
     def generate_key(
         cls,
         expires_at: Optional[date] = None,
         tier: str = "standard",
+        hwid: str = "ANY",
         uid: str = "",
+        private_key: Optional[Union[str, bytes, ed25519.Ed25519PrivateKey]] = None,
         secret_key: Optional[str] = None,
     ) -> str:
-        """Generate a cryptographically signed license product key.
+        """Generate a cryptographically signed license product key using Ed25519.
 
         Args:
             expires_at: Expiration date, or None for a Lifetime license.
             tier: License tier string (e.g. standard, pro).
+            hwid: Machine ID to bind license to, or 'ANY' for portable license.
             uid: Optional customer identifier or salt.
-            secret_key: Optional signing key override.
+            private_key: Vendor Ed25519 signing private key.
+            secret_key: Legacy alias for private_key parameter.
 
         Returns:
-            Formatted license key (e.g. MDFL-XXXX-XXXX-XXXX-XXXX).
+            Formatted license key (e.g. MDFL-XXXXX-XXXXX-XXXXX-...).
         """
         exp_str = expires_at.strftime("%Y%m%d") if expires_at else cls.LIFETIME_EXPIRY
         clean_tier = re.sub(r"[^a-zA-Z0-9]", "", tier).lower()[:4] or "std"
-        clean_uid = re.sub(r"[^a-zA-Z0-9]", "", uid).upper()[:6] or "USER"
+        clean_hwid = re.sub(r"[^a-zA-Z0-9\-\*]", "", hwid).upper() or "ANY"
+        clean_uid = re.sub(r"[^a-zA-Z0-9]", "", uid).upper()[:12] or "USER"
 
-        payload = f"{exp_str}:{clean_tier}:{clean_uid}"
+        payload = f"{exp_str}:{clean_tier}:{clean_hwid}:{clean_uid}"
+        payload_bytes = payload.encode("utf-8")
 
-        config_secret = secret_key or get_config().license_secret
-        sig = hmac.new(config_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
+        config = get_config()
+        raw_priv = private_key or secret_key or config.license_private_key or DEFAULT_DEV_PRIVATE_KEY
+        priv = _load_private_key(raw_priv)
 
-        combined = f"{payload}:{sig}"
-        encoded = base64.b32encode(combined.encode("utf-8")).decode("utf-8").rstrip("=")
+        signature = priv.sign(payload_bytes)
 
-        # Format into clean 4-character blocks
-        chunks = [encoded[i : i + 4] for i in range(0, len(encoded), 4)]
+        # Binary packet: 1 byte payload length + payload + 64 bytes signature
+        packet = bytes([len(payload_bytes)]) + payload_bytes + signature
+        encoded = base64.b32encode(packet).decode("utf-8").rstrip("=")
+
+        chunks = [encoded[i : i + 5] for i in range(0, len(encoded), 5)]
         return f"{cls.PREFIX}-" + "-".join(chunks)
 
     def verify_key(self, key: str) -> LicenseInfo:
-        """Verify the cryptographic signature, format, and expiration of a license key.
+        """Verify the cryptographic signature, format, HWID, and expiration of a license key.
 
         Args:
             key: License key string to verify.
@@ -127,20 +229,11 @@ class LicenseService:
             )
 
         body = clean_key[len(self.PREFIX) + 1 :].replace("-", "")
-        # Restore Base32 padding
         padding = (8 - (len(body) % 8)) % 8
         padded_b32 = body + ("=" * padding)
 
         try:
-            decoded = base64.b32decode(padded_b32.encode("utf-8")).decode("utf-8")
-            parts = decoded.split(":")
-            if len(parts) != 4:
-                return LicenseInfo(
-                    status=LicenseStatus.INVALID,
-                    is_valid=False,
-                    message="Corrupted license key structure.",
-                )
-            exp_str, tier, uid, sig = parts
+            packet = base64.b32decode(padded_b32.encode("utf-8"))
         except Exception as exc:
             logger.debug("Base32 decoding failed for license key: %s", exc)
             return LicenseInfo(
@@ -149,15 +242,68 @@ class LicenseService:
                 message="Failed to decode license key.",
             )
 
-        # Verify cryptographic HMAC signature
-        payload = f"{exp_str}:{tier}:{uid}"
-        expected_sig = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
+        if len(packet) < 66:  # 1 byte len + at least 1 byte payload + 64 bytes sig
+            return LicenseInfo(
+                status=LicenseStatus.INVALID,
+                is_valid=False,
+                message="Corrupted license key structure.",
+            )
 
-        if not hmac.compare_digest(sig.lower(), expected_sig.lower()):
+        p_len = packet[0]
+        if len(packet) < 1 + p_len + 64:
+            return LicenseInfo(
+                status=LicenseStatus.INVALID,
+                is_valid=False,
+                message="Corrupted license key structure.",
+            )
+
+        payload_bytes = packet[1 : 1 + p_len]
+        signature_bytes = packet[1 + p_len : 1 + p_len + 64]
+
+        # Verify Ed25519 signature
+        try:
+            self._public_key.verify(signature_bytes, payload_bytes)
+        except InvalidSignature:
             return LicenseInfo(
                 status=LicenseStatus.INVALID,
                 is_valid=False,
                 message="License signature verification failed.",
+            )
+        except Exception as exc:
+            logger.debug("Signature verification error: %s", exc)
+            return LicenseInfo(
+                status=LicenseStatus.INVALID,
+                is_valid=False,
+                message="License verification failed.",
+            )
+
+        # Parse verified payload
+        try:
+            payload_str = payload_bytes.decode("utf-8")
+            parts = payload_str.split(":")
+            if len(parts) != 4:
+                return LicenseInfo(
+                    status=LicenseStatus.INVALID,
+                    is_valid=False,
+                    message="Invalid payload structure in license.",
+                )
+            exp_str, tier, hwid, uid = parts
+        except Exception:
+            return LicenseInfo(
+                status=LicenseStatus.INVALID,
+                is_valid=False,
+                message="Corrupted payload in license key.",
+            )
+
+        # Verify Machine ID (HWID) binding
+        if not verify_machine_id(hwid, current_id=self._current_hwid):
+            return LicenseInfo(
+                status=LicenseStatus.INVALID,
+                is_valid=False,
+                tier=tier,
+                hwid=hwid,
+                license_key=clean_key,
+                message=f"License is registered to a different device ({hwid}).",
             )
 
         # Parse lifetime status
@@ -169,6 +315,7 @@ class LicenseService:
                 days_remaining=99999,
                 hours_remaining=999999,
                 tier=tier,
+                hwid=hwid,
                 license_key=clean_key,
                 message="Lifetime license active.",
             )
@@ -196,6 +343,7 @@ class LicenseService:
                 days_remaining=0,
                 hours_remaining=0,
                 tier=tier,
+                hwid=hwid,
                 license_key=clean_key,
                 message=f"License expired on {exp_date.strftime('%Y-%m-%d')}.",
             )
@@ -210,6 +358,7 @@ class LicenseService:
             days_remaining=days_remaining,
             hours_remaining=hours_remaining,
             tier=tier,
+            hwid=hwid,
             license_key=clean_key,
             message=f"License active: {days_remaining} days remaining.",
         )
@@ -249,54 +398,48 @@ class LicenseService:
         return False
 
     def get_current_license(self) -> LicenseInfo:
-        """Retrieve stored license, verify its validity, and check for clock tampering.
+        """Verify the currently stored license key against expiration and clock rollback tampering.
 
         Returns:
-            LicenseInfo reflecting current runtime status.
+            LicenseInfo object for current stored key or UNACTIVATED if no key stored.
         """
         if not self._repo:
             return LicenseInfo(
                 status=LicenseStatus.UNACTIVATED,
                 is_valid=False,
-                message="No license repository configured.",
+                message="No repository available.",
             )
 
-        stored_key = self._repo.get(self.SETTING_KEY_LICENSE, "")
+        stored_key = self._repo.get(self.SETTING_KEY_LICENSE)
         if not stored_key or not stored_key.strip():
             return LicenseInfo(
                 status=LicenseStatus.UNACTIVATED,
                 is_valid=False,
-                message="MediaFlow is not activated. Please enter a license key.",
+                message="Application is not activated.",
             )
 
-        # Clock-tampering verification
-        now_utc = datetime.now(timezone.utc)
-        last_check_iso = self._repo.get(self.SETTING_KEY_LAST_CHECK)
-
-        if last_check_iso:
+        # Detect potential clock tampering against last recorded check timestamp
+        last_check_str = self._repo.get(self.SETTING_KEY_LAST_CHECK)
+        if last_check_str:
             try:
-                last_check = datetime.fromisoformat(last_check_iso)
-                # If current time is more than 60 seconds before last recorded check
-                if (last_check - now_utc).total_seconds() > 60:
-                    logger.warning(
-                        "System clock rollback detected. Current: %s, Last check: %s",
-                        now_utc.isoformat(),
-                        last_check_iso,
-                    )
+                last_check = datetime.fromisoformat(last_check_str)
+                now_utc = datetime.now(timezone.utc)
+                if now_utc < (last_check.replace(tzinfo=timezone.utc) if last_check.tzinfo is None else last_check):
+                    logger.warning("System clock rollback detected: current=%s, last_check=%s", now_utc, last_check)
                     return LicenseInfo(
                         status=LicenseStatus.TAMPERED,
                         is_valid=False,
                         license_key=stored_key,
-                        message="System clock rollback detected. Please restore correct date and time.",
+                        message="System clock rollback detected. Verification suspended.",
                     )
             except Exception as exc:
                 logger.debug("Failed parsing last check timestamp: %s", exc)
 
         info = self.verify_key(stored_key)
 
-        # Update last check timestamp if license is active
         if info.is_valid:
-            self._repo.set(self.SETTING_KEY_LAST_CHECK, now_utc.isoformat())
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._repo.set(self.SETTING_KEY_LAST_CHECK, now_iso)
 
         return info
 
@@ -308,3 +451,6 @@ class LicenseService:
         """
         info = self.get_current_license()
         return info.is_valid and info.status == LicenseStatus.ACTIVE
+
+    verify_active_license = get_current_license
+

@@ -28,6 +28,46 @@ class DownloadCancelledException(Exception):
     pass
 
 
+def resolve_ytdlp_format(format_spec: Optional[str]) -> str:
+    """Resolve user-facing format label or quality string into a resilient yt-dlp format selector.
+
+    Handles UI presets like '1080p MP4', '720p MP4', 'Audio Only MP3', as well as raw
+    format IDs with sensible fallbacks to ensure downloads never fail due to
+    unmatched format constraints.
+    """
+    if not format_spec or not format_spec.strip():
+        return "bestvideo+bestaudio/best"
+
+    spec = format_spec.strip()
+    spec_lower = spec.lower()
+
+    # If it is already a complex yt-dlp selector expression
+    if "+" in spec or "/" in spec or "[" in spec:
+        return spec
+
+    if "audio" in spec_lower or spec_lower in ("mp3", "m4a", "aac", "wav", "flac"):
+        return "bestaudio/best"
+
+    if "2160" in spec_lower or "4k" in spec_lower:
+        return "bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best"
+    if "1440" in spec_lower or "2k" in spec_lower:
+        return "bestvideo[height<=1440]+bestaudio/best[height<=1440]/bestvideo+bestaudio/best"
+    if "1080" in spec_lower:
+        return "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
+    if "720" in spec_lower:
+        return "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best"
+    if "480" in spec_lower:
+        return "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best"
+    if "360" in spec_lower:
+        return "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best"
+
+    if spec_lower in ("best", "best quality", "best quality (auto)", "auto", "default"):
+        return "bestvideo+bestaudio/best"
+
+    # For any unrecognized or custom format identifier, try it first then fallback to best
+    return f"{spec}/bestvideo+bestaudio/best"
+
+
 class DownloadWorker:
     """Executes a single media download in a worker thread."""
 
@@ -195,7 +235,7 @@ class DownloadWorker:
             elif d.get("status") == "error":
                 raise ValueError("Download failed during stream extraction.")
 
-        selected_format = self.task.format_id or "bestvideo+bestaudio/best"
+        selected_format = resolve_ytdlp_format(self.task.format_id)
         ydl_opts = {
             "outtmpl": outtmpl,
             "format": selected_format,
@@ -205,6 +245,15 @@ class DownloadWorker:
             "socket_timeout": 15,
             "max_filesize": config.max_download_bytes,
         }
+
+        # Check if user requested audio-only and ffmpeg is available
+        is_audio = "audio" in (self.task.format_id or "").lower() or (self.task.quality or "").lower().startswith("audio")
+        if is_audio and self.ffmpeg and self.ffmpeg.is_available():
+            ydl_opts["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }]
 
         # If custom ffmpeg path exists, provide to yt-dlp
         if self.ffmpeg and self.ffmpeg.is_available() and self.ffmpeg._ffmpeg_path:

@@ -106,6 +106,10 @@ class KeygenWindow(QMainWindow):
         self.user_input.setPlaceholderText("e.g. John Doe, customer@email.com")
         form_layout.addRow("Customer Name / ID:", self.user_input)
 
+        self.hwid_input = QLineEdit()
+        self.hwid_input.setPlaceholderText("e.g. MDFL-HWID-XXXX-XXXX (leave empty for ANY device)")
+        form_layout.addRow("Customer Machine ID:", self.hwid_input)
+
         self.tier_combo = QComboBox()
         self.tier_combo.addItems(["Standard", "Pro"])
         form_layout.addRow("Tier:", self.tier_combo)
@@ -115,7 +119,7 @@ class KeygenWindow(QMainWindow):
         # Output key display
         self.key_output = QLineEdit()
         self.key_output.setReadOnly(True)
-        self.key_output.setPlaceholderText("MDFL-XXXX-XXXX-XXXX-XXXX")
+        self.key_output.setPlaceholderText("MDFL-XXXXX-XXXXX-XXXXX-...")
         self.key_output.setStyleSheet(
             "font-family: Consolas, monospace; font-size: 13px; font-weight: bold; color: #9ece6a;"
         )
@@ -157,10 +161,12 @@ class KeygenWindow(QMainWindow):
 
         tier = self.tier_combo.currentText().lower()
         user = self.user_input.text().strip()
+        hwid = self.hwid_input.text().strip() or "ANY"
 
         key = LicenseService.generate_key(
             expires_at=exp_date,
             tier=tier,
+            hwid=hwid,
             uid=user,
         )
 

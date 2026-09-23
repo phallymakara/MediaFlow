@@ -37,9 +37,16 @@ class ThemeColors:
     text_disabled: str = "#52525b"
 
 
+import sys
+
 COLORS = ThemeColors()
 
-FONT_FAMILY = '"Segoe UI", "SF Pro Display", "Inter", sans-serif'
+if sys.platform == "darwin":
+    FONT_FAMILY = '-apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", sans-serif'
+elif sys.platform == "win32":
+    FONT_FAMILY = '"Segoe UI", "Inter", sans-serif'
+else:
+    FONT_FAMILY = '"Inter", "Ubuntu", "DejaVu Sans", sans-serif'
 
 
 def get_application_stylesheet() -> str:
@@ -268,22 +275,44 @@ def get_application_stylesheet() -> str:
     }}
 
     /* Tabular Task Queue (QTableWidget) */
-    QTableWidget {{
+    QTableWidget, QTableView {{
         background-color: {COLORS.bg_window};
-        border: none;
+        border: 1px solid {COLORS.border_subtle};
+        border-radius: 6px;
         gridline-color: transparent;
         selection-background-color: {COLORS.bg_selected};
         selection-color: {COLORS.text_primary};
         outline: none;
     }}
 
-    QTableWidget::item {{
+    QTableWidget::item, QTableView::item {{
+        background-color: {COLORS.bg_window};
+        color: {COLORS.text_primary};
         padding: 6px 10px;
-        border-bottom: 1px solid {COLORS.bg_surface};
+        border-bottom: 1px solid {COLORS.bg_surface_alt};
     }}
 
-    QTableWidget::item:selected {{
+    QTableWidget::item:hover, QTableView::item:hover {{
+        background-color: {COLORS.bg_hover};
+    }}
+
+    QTableWidget::item:selected, QTableView::item:selected {{
         background-color: {COLORS.bg_selected};
+        color: {COLORS.text_primary};
+    }}
+
+    QTableWidget QWidget {{
+        background-color: transparent;
+        color: {COLORS.text_primary};
+    }}
+
+    QTableWidget QLabel {{
+        background-color: transparent;
+    }}
+
+    QHeaderView {{
+        background-color: {COLORS.bg_surface};
+        border: none;
     }}
 
     QHeaderView::section {{
@@ -298,19 +327,27 @@ def get_application_stylesheet() -> str:
         border-bottom: 1px solid {COLORS.border_subtle};
     }}
 
-    /* Slim Progress Bar */
-    QProgressBar {{
-        background-color: {COLORS.border_subtle};
+    QTableCornerButton::section {{
+        background-color: {COLORS.bg_surface};
         border: none;
-        border-radius: 3px;
-        max-height: 6px;
-        min-height: 6px;
-        text-align: right;
+    }}
+
+    /* Progress Bar */
+    QProgressBar {{
+        background-color: {COLORS.bg_surface};
+        border: 1px solid {COLORS.border_subtle};
+        border-radius: 8px;
+        max-height: 16px;
+        min-height: 16px;
+        text-align: center;
+        color: {COLORS.text_primary};
+        font-size: 11px;
+        font-weight: 600;
     }}
 
     QProgressBar::chunk {{
         background-color: {COLORS.accent_primary};
-        border-radius: 3px;
+        border-radius: 7px;
     }}
 
     QProgressBar#progressCompleted::chunk {{
@@ -367,7 +404,7 @@ def get_application_stylesheet() -> str:
     }}
 
     QSlider::handle:horizontal {{
-        background: #ffffff;
+        background: {COLORS.text_primary};
         border: 1px solid {COLORS.accent_primary};
         width: 14px;
         margin-top: -4px;

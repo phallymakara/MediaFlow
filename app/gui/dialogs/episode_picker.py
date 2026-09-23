@@ -53,7 +53,7 @@ class EpisodePickerDialog(QDialog):
         # 1. Header Information
         header_title = QLabel(self.media_info.title, self)
         header_title.setObjectName("pageTitle")
-        header_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #ffffff;")
+        header_title.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {COLORS.text_primary};")
         layout.addWidget(header_title)
 
         count_text = f"Total Episodes Available: {len(self.media_info.episodes)}"

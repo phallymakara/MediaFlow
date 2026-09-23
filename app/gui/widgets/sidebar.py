@@ -122,7 +122,7 @@ class Sidebar(QFrame):
 
         title_label = QLabel("MediaFlow", header_widget)
         title_label.setObjectName("pageTitle")
-        title_label.setStyleSheet("font-size: 16px; font-weight: 700; color: #ffffff;")
+        title_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS.text_primary};")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 

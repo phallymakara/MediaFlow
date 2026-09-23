@@ -170,3 +170,46 @@ def test_anti_clock_tamper_detection(temp_settings_repo: SettingsRepository) -> 
     assert info.is_valid is False
     assert service.is_download_allowed() is False
     assert "rollback" in info.message.lower()
+
+
+def test_machine_id_binding_success_and_mismatch() -> None:
+    """Verify that a machine-locked license succeeds on matching hardware and fails on mismatch."""
+    hwid_a = "MDFL-HWID-AAAA-1111"
+    hwid_b = "MDFL-HWID-BBBB-2222"
+
+    service_a = LicenseService(current_hwid=hwid_a)
+    service_b = LicenseService(current_hwid=hwid_b)
+
+    key_for_a = LicenseService.generate_key(
+        expires_at=None,
+        tier="pro",
+        hwid=hwid_a,
+    )
+
+    # Validates on Machine A
+    info_a = service_a.verify_key(key_for_a)
+    assert info_a.is_valid is True
+    assert info_a.status == LicenseStatus.ACTIVE
+    assert info_a.hwid == hwid_a
+
+    # Rejected on Machine B
+    info_b = service_b.verify_key(key_for_a)
+    assert info_b.is_valid is False
+    assert info_b.status == LicenseStatus.INVALID
+    assert "different device" in info_b.message.lower()
+
+
+def test_wildcard_machine_id_license() -> None:
+    """Verify that a wildcard ANY license activates on any device."""
+    service_1 = LicenseService(current_hwid="MDFL-HWID-1111-2222")
+    service_2 = LicenseService(current_hwid="MDFL-HWID-3333-4444")
+
+    portable_key = LicenseService.generate_key(
+        expires_at=None,
+        tier="pro",
+        hwid="ANY",
+    )
+
+    assert service_1.verify_key(portable_key).is_valid is True
+    assert service_2.verify_key(portable_key).is_valid is True
+

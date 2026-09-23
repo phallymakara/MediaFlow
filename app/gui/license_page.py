@@ -20,6 +20,7 @@ from app.database.database import DatabaseManager
 from app.database.repository import SettingsRepository
 from app.gui.assets import create_vector_icon
 from app.gui.styles import COLORS
+from app.services.hardware import get_machine_id
 from app.services.license import LicenseInfo, LicenseService, LicenseStatus
 
 logger = logging.getLogger(__name__)
@@ -207,6 +208,30 @@ class LicensePage(QWidget):
         row3.addWidget(self._active_key_label, 1)
 
         card_layout.addLayout(row3)
+
+        # Row 4: Machine ID (Hardware Fingerprint)
+        row4 = QHBoxLayout()
+        row4.setSpacing(8)
+
+        hwid_prefix = QLabel("Machine ID:", self._status_card)
+        hwid_prefix.setStyleSheet("font-weight: 500; font-size: 12px; color: " + COLORS.text_secondary)
+        row4.addWidget(hwid_prefix)
+
+        self._machine_id = get_machine_id()
+        self._hwid_label = QLabel(self._machine_id, self._status_card)
+        self._hwid_label.setStyleSheet(
+            f"font-family: Consolas, monospace; font-size: 12px; font-weight: 600; color: {COLORS.accent_primary};"
+        )
+        row4.addWidget(self._hwid_label)
+
+        copy_hwid_btn = QPushButton("Copy ID", self._status_card)
+        copy_hwid_btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        copy_hwid_btn.clicked.connect(self._on_copy_hwid)
+        row4.addWidget(copy_hwid_btn)
+
+        row4.addStretch()
+        card_layout.addLayout(row4)
+
         layout.addWidget(self._status_card)
 
         # Clock-Tampering Warning Banner (hidden by default)
@@ -238,7 +263,7 @@ class LicensePage(QWidget):
         key_input_row.setSpacing(8)
 
         self._key_input = QLineEdit(self)
-        self._key_input.setPlaceholderText("MDFL-XXXX-XXXX-XXXX-XXXX")
+        self._key_input.setPlaceholderText("MDFL-XXXXX-XXXXX-XXXXX-...")
         self._key_input.setStyleSheet(f"QLineEdit {{ font-family: Consolas, monospace; font-size: 13px; }}")
         self._key_input.textChanged.connect(self._clear_error)
         key_input_row.addWidget(self._key_input, 1)
@@ -358,6 +383,14 @@ class LicensePage(QWidget):
         if cleaned:
             self._key_input.setText(cleaned)
             self._clear_error()
+
+    def _on_copy_hwid(self) -> None:
+        """Copy hardware Machine ID to system clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self._machine_id)
+        self._action_status_label.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px; font-weight: 500;")
+        self._action_status_label.setText("Machine ID copied to clipboard.")
+        self._action_status_label.show()
 
     def _on_activate_clicked(self) -> None:
         """Validate and activate the entered license key."""

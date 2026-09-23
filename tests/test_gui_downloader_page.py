@@ -6,7 +6,7 @@ import pytest
 
 from app.core.media import MediaEpisode, MediaInfo
 from app.database.models import DownloadStatus
-from app.gui.downloader_page import format_bytes, format_eta, format_speed
+from app.gui.downloader_page import format_bytes, format_eta, format_speed, format_speed_eta
 
 
 def test_format_bytes() -> None:
@@ -34,6 +34,15 @@ def test_format_eta() -> None:
     assert format_eta(24) == "24s"
     assert format_eta(75) == "1m 15s"
     assert format_eta(3665) == "1h 01m"
+
+
+def test_format_speed_eta() -> None:
+    """Verify combined Speed and ETA label formatting."""
+    assert format_speed_eta(0.0, None) == "--"
+    assert format_speed_eta(0.0, 45) == "--"
+    assert format_speed_eta(1024 * 1024 * 5.2, None) == "5.2 MB/s"
+    assert format_speed_eta(1024 * 1024 * 5.2, 45) == "5.2 MB/s • 45s left"
+    assert format_speed_eta(1024 * 500, 75) == "500.0 KB/s • 1m 15s left"
 
 
 def test_media_episode_selection_logic() -> None:

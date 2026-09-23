@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.downloader import Downloader
-from app.core.extractor_registry import ExtractorRegistry
+from app.core.extractor_registry import ExtractorRegistry, get_default_registry
 from app.database.database import DatabaseManager
 from app.database.repository import DownloadRepository, SettingsRepository
 from app.gui.assets import get_logo_pixmap
@@ -70,7 +70,8 @@ class MainWindow(QMainWindow):
         self.license_service = license_service or LicenseService(settings_repo=self.settings_repo)
         self.storage_service = storage_service or StorageService()
         self.ffmpeg_service = ffmpeg_service or FFmpegService()
-        self.extractor_registry = extractor_registry or ExtractorRegistry()
+        self.extractor_registry = extractor_registry or get_default_registry()
+
 
         self.downloader = downloader or Downloader(
             storage_service=self.storage_service,

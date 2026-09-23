@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.config import get_config
 from app.core.downloader import Downloader
-from app.core.extractor_registry import ExtractorRegistry
+from app.core.extractor_registry import ExtractorRegistry, get_default_registry
 from app.database.database import DatabaseManager
 from app.database.repository import DownloadRepository, SettingsRepository
 from app.gui.assets import get_logo_pixmap
@@ -87,7 +87,7 @@ def verify_application() -> int:
         storage_service = StorageService()
         ffmpeg_service = FFmpegService()
         license_service = LicenseService(settings_repo=settings_repo)
-        extractor_registry = ExtractorRegistry()
+        extractor_registry = get_default_registry()
 
         downloader = Downloader(
             storage_service=storage_service,
@@ -150,7 +150,7 @@ def main() -> None:
     storage_service = StorageService()
     ffmpeg_service = FFmpegService()
     license_service = LicenseService(settings_repo=settings_repo)
-    extractor_registry = ExtractorRegistry()
+    extractor_registry = get_default_registry()
 
     downloader = Downloader(
         storage_service=storage_service,
