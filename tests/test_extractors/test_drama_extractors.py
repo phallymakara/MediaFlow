@@ -134,3 +134,205 @@ def test_default_registry_routes_drama_platforms() -> None:
     # General video still falls back to yt-dlp
     youtube_match = registry.find_extractor("https://youtube.com/watch?v=dQw4w9WgXcQ")
     assert youtube_match.platform_name == "Generic Video"
+
+
+def test_embedded_json_ld_and_next_data_extraction() -> None:
+    """Verify that JSON-LD and Next.js state embedded scripts are parsed for media streams."""
+    html_with_embedded = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>CEO's Hidden Heiress</title>
+        <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "VideoObject",
+            "name": "CEO's Hidden Heiress Episode 1",
+            "contentUrl": "https://cdn.example.com/stream/master.m3u8",
+            "thumbnailUrl": "https://cdn.example.com/thumbs/cover.jpg",
+            "hasPart": [
+                {"episode_number": 1, "name": "Pilot", "url": "https://example.com/ep1"},
+                {"episode_number": 2, "name": "Confrontation", "url": "https://example.com/ep2"}
+            ]
+        }
+        </script>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+            "props": {
+                "pageProps": {
+                    "video_url": "https://cdn.example.com/backup.mp4"
+                }
+            }
+        }
+        </script>
+    </head>
+    <body>
+        <div>Desktop view without direct video tags</div>
+    </body>
+    </html>
+    """
+    mock_client = MagicMock(spec=httpx.Client)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.text = html_with_embedded
+    mock_client.get.return_value = mock_response
+
+    extractor = DramaBoxExtractor(client=mock_client)
+    media_info = extractor.extract("https://www.dramabox.com/drama/9999")
+
+    assert media_info.title == "CEO's Hidden Heiress"
+    assert media_info.thumbnail_url == "https://cdn.example.com/thumbs/cover.jpg"
+    assert len(media_info.formats) >= 2
+    # Should have discovered m3u8 and mp4 from embedded JSON
+    stream_exts = [f.extension for f in media_info.formats]
+    assert "m3u8" in stream_exts
+    assert "mp4" in stream_exts
+    # Discovered episodes from hasPart
+    assert len(media_info.episodes) == 2
+    assert media_info.episodes[0].title == "Pilot"
+    assert media_info.episodes[1].title == "Confrontation"
+
+
+def test_mobile_profile_fallback_when_desktop_lacks_stream() -> None:
+    """Verify that when desktop HTML has no video tags, mobile headers retry discovers mobile streams."""
+    desktop_empty_html = """
+    <html><head><title>Locked Drama</title></head><body><div class="locked">Please download the mobile app</div></body></html>
+    """
+    mobile_rich_html = """
+    <html>
+    <head><title>Locked Drama</title></head>
+    <body>
+        <video src="https://cdn.example.com/mobile/stream.mp4"></video>
+        <a href="/ep-1">Ep 1</a>
+        <a href="/ep-2">Ep 2</a>
+    </body>
+    </html>
+    """
+
+    mock_client = MagicMock(spec=httpx.Client)
+    desktop_resp = MagicMock(spec=httpx.Response)
+    desktop_resp.status_code = 200
+    desktop_resp.text = desktop_empty_html
+
+    mobile_resp = MagicMock(spec=httpx.Response)
+    mobile_resp.status_code = 200
+    mobile_resp.text = mobile_rich_html
+
+    # First call returns desktop HTML, second call (with mobile headers) returns mobile HTML
+    mock_client.get.side_effect = [desktop_resp, mobile_resp]
+
+    extractor = NetShortExtractor(client=mock_client)
+    media_info = extractor.extract("https://netshort.com/locked/100")
+
+    assert len(media_info.formats) > 0
+    assert any("mobile/stream.mp4" in fmt.note or fmt.format_id != "default" for fmt in media_info.formats)
+    assert len(media_info.episodes) == 2
+
+
+def test_dramabox_canonical_id_extraction() -> None:
+    """Verify drama ID parser extracts canonical IDs across URL formats."""
+    extractor = DramaBoxExtractor()
+
+    assert extractor.extract_drama_id("https://www.dramabox.com/drama/12345/ep-1") == "12345"
+    assert extractor.extract_drama_id("https://www.dramabox.com/watch/67890") == "67890"
+    assert extractor.extract_drama_id("https://www.dramabox.com/movie/55555") == "55555"
+    assert extractor.extract_drama_id("https://www.dramabox.com/play?id=8888") == "8888"
+    assert extractor.extract_drama_id("https://dramaboxdb.com/watch/9999") == "9999"
+
+
+def test_dramabox_mirror_resolution_fallback() -> None:
+    """Verify DramaBox triggers mirror resolver when primary page is empty."""
+    desktop_empty_html = """
+    <html><head><title>Restricted Drama</title></head><body>No media here</body></html>
+    """
+    mirror_rich_html = """
+    <html>
+    <head>
+        <meta property="og:title" content="Revenge of the Substituted Bride" />
+        <meta property="og:image" content="https://dramaboxdb.com/posters/12345.jpg" />
+    </head>
+    <body>
+        <video src="https://cdn.dramaboxdb.com/stream/ep1.mp4"></video>
+        <a href="/watch/12345/ep-1">Episode 1</a>
+        <a href="/watch/12345/ep-2">Episode 2</a>
+    </body>
+    </html>
+    """
+
+    mock_client = MagicMock(spec=httpx.Client)
+    resp_empty = MagicMock(spec=httpx.Response)
+    resp_empty.status_code = 200
+    resp_empty.text = desktop_empty_html
+
+    resp_mirror = MagicMock(spec=httpx.Response)
+    resp_mirror.status_code = 200
+    resp_mirror.text = mirror_rich_html
+
+    # Calls: 1. Desktop official, 2. Mobile official, 3. Mirror indexer
+    mock_client.get.side_effect = [resp_empty, resp_empty, resp_mirror]
+
+    extractor = DramaBoxExtractor(client=mock_client)
+    media_info = extractor.extract("https://www.dramabox.com/drama/12345")
+
+    assert media_info.title == "Revenge of the Substituted Bride"
+    assert media_info.thumbnail_url == "https://dramaboxdb.com/posters/12345.jpg"
+    assert len(media_info.formats) > 0
+    assert len(media_info.episodes) == 2
+    assert "dramaboxdb.com" in media_info.url
+
+
+def test_canonical_id_extraction_across_all_platforms() -> None:
+    """Verify canonical ID extraction regex across all drama extractors."""
+    assert NetShortExtractor().extract_canonical_id("https://netshort.com/watch/ns_98765") == "ns_98765"
+    assert NetShortExtractor().extract_canonical_id("https://app.netshortapp.com/v/v_1234") == "v_1234"
+
+    assert GoodShortExtractor().extract_canonical_id("https://goodshort.com/book/gs_54321") == "gs_54321"
+    assert GoodShortExtractor().extract_canonical_id("https://goodshort.com/drama/d_888") == "d_888"
+
+    assert FlickReelsExtractor().extract_canonical_id("https://flickreels.com/series/fr_111") == "fr_111"
+    assert FlickReelsExtractor().extract_canonical_id("https://flickreelsapp.com/watch/fr_222") == "fr_222"
+
+    assert FreeReelsExtractor().extract_canonical_id("https://freereels.com/detail/freer_333") == "freer_333"
+    assert StardustTVExtractor().extract_canonical_id("https://stardusttv.com/drama/star_444") == "star_444"
+    assert DramaWaveExtractor().extract_canonical_id("https://dramawave.com/show/dw_555") == "dw_555"
+
+
+def test_multi_mirror_rotation_succeeds_on_second_mirror() -> None:
+    """Verify rotation continues to mirror 2 if mirror 1 fails or returns 404."""
+    desktop_empty = "<html><head><title>Locked</title></head><body>No streams</body></html>"
+    mirror_2_content = """
+    <html>
+    <head><meta property="og:title" content="Reborn Princess" /></head>
+    <body>
+        <video src="https://cdn.netshortdb.com/stream/ep1.mp4"></video>
+        <a href="/ep-1">Episode 1</a>
+    </body>
+    </html>
+    """
+
+    mock_client = MagicMock(spec=httpx.Client)
+
+    resp_empty = MagicMock(spec=httpx.Response)
+    resp_empty.status_code = 200
+    resp_empty.text = desktop_empty
+
+    resp_mirror1_err = MagicMock(spec=httpx.Response)
+    resp_mirror1_err.status_code = 404
+    resp_mirror1_err.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Not Found", request=MagicMock(), response=resp_mirror1_err
+    )
+
+    resp_mirror2 = MagicMock(spec=httpx.Response)
+    resp_mirror2.status_code = 200
+    resp_mirror2.text = mirror_2_content
+
+    # Call 1: Desktop, Call 2: Mobile, Call 3: Mirror 1 (fails 404), Call 4: Mirror 2 (succeeds)
+    mock_client.get.side_effect = [resp_empty, resp_empty, resp_mirror1_err, resp_mirror2]
+
+    extractor = NetShortExtractor(client=mock_client)
+    media_info = extractor.extract("https://netshort.com/watch/drama_xyz")
+
+    assert media_info.title == "Reborn Princess"
+    assert len(media_info.formats) > 0
+    assert len(media_info.episodes) == 1
+    assert "netshortdb.com" in media_info.url
