@@ -223,6 +223,27 @@ def create_vector_image(icon_name: str, color: Optional[str] = None, size: int =
         painter.drawLine(QPointF(margin, margin), QPointF(margin + w, margin + h))
         painter.drawLine(QPointF(margin + w, margin), QPointF(margin, margin + h))
 
+    elif icon_name == "pause":
+        # Two vertical bars
+        bar_w = max(2.0, w * 0.22)
+        p1 = margin + w * 0.2
+        p2 = margin + w * 0.8 - bar_w
+        painter.fillRect(QRectF(p1, margin, bar_w, h), QBrush(stroke_color))
+        painter.fillRect(QRectF(p2, margin, bar_w, h), QBrush(stroke_color))
+
+    elif icon_name == "stop":
+        # Solid square
+        inset = size * 0.25
+        side = size - 2 * inset
+        painter.fillRect(QRectF(inset, inset, side, side), QBrush(stroke_color))
+
+    elif icon_name in ("back", "arrow_left"):
+        # Left-pointing arrow
+        cy = size / 2
+        painter.drawLine(QPointF(margin + w * 0.85, cy), QPointF(margin + w * 0.1, cy))
+        painter.drawLine(QPointF(margin + w * 0.45, margin + h * 0.15), QPointF(margin + w * 0.1, cy))
+        painter.drawLine(QPointF(margin + w * 0.45, margin + h * 0.85), QPointF(margin + w * 0.1, cy))
+
     elif icon_name == "retry":
         # Circular reload arc with arrow
         cx = size / 2

@@ -4,9 +4,10 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
+import uuid
 
-from PySide6.QtCore import QEvent, QObject, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -28,11 +29,12 @@ from app.core.media import MediaEpisode, MediaInfo
 from app.core.tasks import DownloadTask
 from app.database.models import DownloadStatus
 from app.gui.assets import create_vector_icon
-from app.gui.dialogs.episode_picker import EpisodePickerDialog
+from app.gui.dialogs import EpisodePickerDialog, MediaLoadingDialog
 from app.gui.styles import COLORS
 from app.gui.widgets.status_badge import StatusBadge
 from app.gui.workers import AnalyzeWorker, DownloadSignalBridge
 from app.services.license import LicenseService
+from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,7 @@ class DownloaderPage(QWidget):
         self._task_data: Dict[str, Dict] = {}
 
         self._current_worker: Optional[AnalyzeWorker] = None
+        self._loading_dialog: Optional[MediaLoadingDialog] = None
 
         self._init_ui()
 
@@ -175,10 +178,24 @@ class DownloaderPage(QWidget):
 
         # 2. Queue Header Toolbar
         queue_header = QHBoxLayout()
+        queue_header.setSpacing(8)
         self._queue_title = QLabel("Active Downloads (0 tasks)", self)
         self._queue_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {COLORS.text_primary};")
         queue_header.addWidget(self._queue_title)
         queue_header.addStretch()
+
+        self._pause_resume_all_btn = QPushButton("Pause All", self)
+        self._pause_resume_all_btn.setIcon(create_vector_icon("pause", size=13))
+        self._pause_resume_all_btn.clicked.connect(self._toggle_pause_resume_all)
+        self._pause_resume_all_btn.setEnabled(False)
+        queue_header.addWidget(self._pause_resume_all_btn)
+
+        self._stop_all_btn = QPushButton("Stop All", self)
+        self._stop_all_btn.setObjectName("dangerButton")
+        self._stop_all_btn.setIcon(create_vector_icon("stop", color=COLORS.status_danger, size=13))
+        self._stop_all_btn.clicked.connect(self._stop_all_tasks)
+        self._stop_all_btn.setEnabled(False)
+        queue_header.addWidget(self._stop_all_btn)
 
         self._clear_finished_btn = QPushButton("Clear Finished", self)
         self._clear_finished_btn.clicked.connect(self._clear_finished_tasks)
@@ -210,16 +227,6 @@ class DownloaderPage(QWidget):
         self._table.setAlternatingRowColors(False)
         self._table.setShowGrid(False)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._table.setMouseTracking(True)
-        self._table.viewport().setMouseTracking(True)
-        self._table.viewport().installEventFilter(self)
-        self._hovered_row: int = -1
-        self._table.setStyleSheet(
-            f"QTableWidget {{ background-color: {COLORS.bg_window}; border: 1px solid {COLORS.border_subtle}; border-radius: 6px; }}"
-            f"QTableWidget::item {{ background-color: {COLORS.bg_window}; color: {COLORS.text_primary}; }}"
-            f"QTableWidget::item:hover {{ background-color: {COLORS.bg_hover}; }}"
-            f"QTableWidget QWidget {{ background-color: transparent; }}"
-        )
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name stretches
@@ -230,7 +237,7 @@ class DownloaderPage(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(5, 110)
+        self._table.setColumnWidth(5, 145)
 
         layout.addWidget(self._table, 1)
 
@@ -274,7 +281,7 @@ class DownloaderPage(QWidget):
         self._url_input.style().polish(self._url_input)
 
     def _on_add_download_clicked(self) -> None:
-        """Trigger asynchronous media extraction and queue submission."""
+        """Trigger asynchronous media extraction with an interactive loading popup dialog."""
         url = self._url_input.text().strip()
         self._clear_input_error()
 
@@ -286,18 +293,37 @@ class DownloaderPage(QWidget):
             self._show_input_error("Active license required to start downloads. Please activate on the License page.")
             return
 
-        self._add_btn.setEnabled(False)
-        self._add_btn.setText("Analyzing...")
+        extractor = self.registry.find_extractor(url)
+        platform_name = extractor.platform_name.title() if extractor else "Video"
 
+        # Show loading popup dialog
+        self._loading_dialog = MediaLoadingDialog(url=url, platform=platform_name, parent=self)
+        self._loading_dialog.rejected.connect(self._on_loading_dialog_cancelled)
+
+        # Start asynchronous analysis worker
         self._current_worker = AnalyzeWorker(url=url, extractor_registry=self.registry, parent=self)
         self._current_worker.analysis_success.connect(self._on_analysis_success)
         self._current_worker.analysis_failed.connect(self._on_analysis_failed)
         self._current_worker.start()
 
+        self._loading_dialog.open()
+
+    def _on_loading_dialog_cancelled(self) -> None:
+        """Handle cancellation from the loading popup dialog."""
+        if self._current_worker and self._current_worker.isRunning():
+            try:
+                self._current_worker.disconnect()
+            except Exception:
+                pass
+            self._current_worker.quit()
+            self._current_worker = None
+        self._loading_dialog = None
+
     def _on_analysis_success(self, media_info: MediaInfo) -> None:
         """Handle resolved metadata and enqueue single download or drama episodes."""
-        self._add_btn.setEnabled(True)
-        self._add_btn.setText("Add Download")
+        if self._loading_dialog:
+            self._loading_dialog.accept()
+            self._loading_dialog = None
 
         selected_format = self._format_combo.currentText()
 
@@ -307,32 +333,72 @@ class DownloaderPage(QWidget):
             if dialog.exec():
                 selected_eps: List[MediaEpisode] = dialog.get_selected_episodes()
                 chosen_format = dialog.get_selected_format()
+                from app.extractors.drama_base import BaseDramaExtractor
+                clean_drama_name = BaseDramaExtractor.clean_drama_title(media_info.title) or media_info.title
+                series_folder = StorageService.generate_media_folder_name(clean_drama_name)
                 for ep in selected_eps:
+                    if ep.episode_number == 0 or "[Full Series Complete]" in ep.title:
+                        ep_title = ep.title
+                    else:
+                        clean_ep = (ep.title or "").strip()
+                        if clean_ep.lower().startswith(clean_drama_name.lower()):
+                            clean_ep = clean_ep[len(clean_drama_name):].lstrip(" -:_")
+                        if clean_ep and not clean_ep.lower().startswith("episode") and clean_ep != f"Ep {ep.episode_number}":
+                            ep_title = f"{clean_drama_name} - Ep {ep.episode_number:02d} - {clean_ep}"
+                        else:
+                            ep_title = f"{clean_drama_name} - Ep {ep.episode_number:02d}"
                     self._enqueue_task(
                         url=ep.url,
-                        title=f"{media_info.title} - Ep {ep.episode_number:02d}",
+                        title=ep_title,
                         platform=media_info.platform,
                         format_str=chosen_format,
                         thumbnail_url=media_info.thumbnail_url,
+                        subfolder=series_folder,
                     )
+
                 self._url_input.clear()
             return
 
-        # Single media download
+        # Single media download: enqueue task and insert row into table
+        video_folder = StorageService.generate_media_folder_name(media_info.title)
         self._enqueue_task(
             url=media_info.url,
             title=media_info.title,
             platform=media_info.platform,
             format_str=selected_format,
             thumbnail_url=media_info.thumbnail_url,
+            subfolder=video_folder,
         )
         self._url_input.clear()
 
     def _on_analysis_failed(self, error_message: str) -> None:
         """Handle media extraction failure safely."""
-        self._add_btn.setEnabled(True)
-        self._add_btn.setText("Add Download")
+        if self._loading_dialog:
+            self._loading_dialog.reject()
+            self._loading_dialog = None
         self._show_input_error(error_message)
+
+    def _remove_table_row(self, task_id: str) -> None:
+        """Remove a single task row and re-index the table."""
+        row = self._task_rows.get(task_id)
+        if row is not None:
+            self._table.removeRow(row)
+            self._task_rows.pop(task_id, None)
+            self._task_data.pop(task_id, None)
+            self._reindex_rows()
+            self._update_queue_summary()
+
+    def _reindex_rows(self) -> None:
+        """Re-index task IDs to table rows after additions or deletions."""
+        self._task_rows.clear()
+        self._row_tasks.clear()
+        for r in range(self._table.rowCount()):
+            item = self._table.item(r, 0)
+            if item:
+                tid = item.data(Qt.ItemDataRole.UserRole)
+                if tid:
+                    self._task_rows[tid] = r
+                    self._row_tasks[r] = tid
 
     def _enqueue_task(
         self,
@@ -341,6 +407,7 @@ class DownloaderPage(QWidget):
         platform: str,
         format_str: str,
         thumbnail_url: Optional[str] = None,
+        subfolder: Optional[str] = None,
     ) -> None:
         """Enqueue task into downloader and insert a new row in task queue table."""
         try:
@@ -348,6 +415,7 @@ class DownloaderPage(QWidget):
                 url=url,
                 title=title,
                 platform=platform,
+                subfolder=subfolder,
                 format_id=format_str,
                 quality=format_str,
                 thumbnail_url=thumbnail_url,
@@ -366,10 +434,11 @@ class DownloaderPage(QWidget):
         self._table.insertRow(row)
         self._table.setRowHeight(row, 46)
 
-        # Initialize uniform dark background items for each column in this row
+        # Initialize standard items for each column in this row
         for c in range(self._table.columnCount()):
             it = QTableWidgetItem()
-            it.setBackground(QColor(COLORS.bg_window))
+            if c == 0:
+                it.setData(Qt.ItemDataRole.UserRole, task.task_id)
             self._table.setItem(row, c, it)
 
         task_id = task.task_id
@@ -445,13 +514,19 @@ class DownloaderPage(QWidget):
         b_layout.addWidget(badge)
         self._table.setCellWidget(row, 4, badge_container)
 
-        # 5: Action Button (Cancel)
+        # 5: Action Buttons (Pause/Resume & Cancel)
         action_widget = QWidget()
         action_widget.installEventFilter(self)
         action_widget.setStyleSheet("background: transparent;")
         action_layout = QHBoxLayout(action_widget)
         action_layout.setContentsMargins(4, 0, 4, 0)
         action_layout.setSpacing(4)
+
+        pause_btn = QPushButton("Pause", action_widget)
+        pause_btn.setObjectName("rowActionButton")
+        pause_btn.setProperty("action_type", "pause")
+        pause_btn.clicked.connect(lambda checked=False, tid=task_id: self._on_toggle_task_pause(tid))
+        action_layout.addWidget(pause_btn)
 
         cancel_btn = QPushButton("Cancel", action_widget)
         cancel_btn.setObjectName("dangerButton")
@@ -507,8 +582,30 @@ class DownloaderPage(QWidget):
             if badge:
                 badge.set_status(new_status)
 
-        # If failed, zero speed
-        if new_status == DownloadStatus.FAILED.value:
+        # Update row Pause/Resume button state
+        action_widget = self._table.cellWidget(row, 5)
+        if action_widget:
+            for btn in action_widget.findChildren(QPushButton):
+                if btn.property("action_type") == "pause":
+                    if new_status == DownloadStatus.PAUSED.value:
+                        btn.setText("Resume")
+                        btn.setEnabled(True)
+                    elif new_status in (DownloadStatus.DOWNLOADING.value, DownloadStatus.QUEUED.value):
+                        btn.setText("Pause")
+                        btn.setEnabled(True)
+                    elif new_status in (
+                        DownloadStatus.COMPLETED.value,
+                        DownloadStatus.FAILED.value,
+                        DownloadStatus.CANCELLED.value,
+                    ):
+                        btn.setEnabled(False)
+
+        # If failed, paused, or cancelled, zero speed
+        if new_status in (
+            DownloadStatus.FAILED.value,
+            DownloadStatus.PAUSED.value,
+            DownloadStatus.CANCELLED.value,
+        ):
             if task_id in self._task_data:
                 self._task_data[task_id]["speed"] = 0.0
 
@@ -555,6 +652,33 @@ class DownloaderPage(QWidget):
         """Cancel the specified active download task."""
         self.downloader.cancel(task_id)
 
+    def _on_toggle_task_pause(self, task_id: str) -> None:
+        """Toggle pause/resume state for a specific task."""
+        data = self._task_data.get(task_id, {})
+        current_status = data.get("status")
+        if current_status == DownloadStatus.PAUSED.value:
+            self.downloader.resume(task_id)
+        elif current_status in (DownloadStatus.DOWNLOADING.value, DownloadStatus.QUEUED.value):
+            self.downloader.pause(task_id)
+        self._update_queue_summary()
+
+    def _toggle_pause_resume_all(self) -> None:
+        """Toggle pause/resume for all active queue downloads."""
+        has_running = any(
+            d.get("status") in (DownloadStatus.DOWNLOADING.value, DownloadStatus.QUEUED.value)
+            for d in self._task_data.values()
+        )
+        if has_running:
+            self.downloader.pause_all()
+        else:
+            self.downloader.resume_all()
+        self._update_queue_summary()
+
+    def _stop_all_tasks(self) -> None:
+        """Cancel all running, queued, and paused downloads."""
+        self.downloader.cancel_all()
+        self._update_queue_summary()
+
     def _open_file_folder(self, file_path: str) -> None:
         """Highlight or open target folder in Windows File Explorer."""
         p = Path(file_path).resolve()
@@ -578,11 +702,7 @@ class DownloaderPage(QWidget):
             self._task_data.pop(task_id, None)
 
         # Re-index remaining task rows
-        self._task_rows.clear()
-        self._row_tasks.clear()
-        for r in range(self._table.rowCount()):
-            pass  # rows re-mapped naturally by next progress events
-
+        self._reindex_rows()
         self._update_queue_summary()
 
     def _update_queue_summary(self) -> None:
@@ -590,40 +710,40 @@ class DownloaderPage(QWidget):
         total_tasks = len(self._task_data)
         downloading = sum(1 for d in self._task_data.values() if d.get("status") == DownloadStatus.DOWNLOADING.value)
         queued = sum(1 for d in self._task_data.values() if d.get("status") == DownloadStatus.QUEUED.value)
+        paused = sum(1 for d in self._task_data.values() if d.get("status") == DownloadStatus.PAUSED.value)
         completed = sum(1 for d in self._task_data.values() if d.get("status") == DownloadStatus.COMPLETED.value)
 
+        active_count = downloading + queued + paused
         self._queue_title.setText(f"Active Downloads ({total_tasks} tasks)")
-        self._summary_label.setText(f"Queue: {downloading} Downloading, {queued} Queued, {completed} Completed")
+
+        status_parts = []
+        if downloading:
+            status_parts.append(f"{downloading} Downloading")
+        if queued:
+            status_parts.append(f"{queued} Queued")
+        if paused:
+            status_parts.append(f"{paused} Paused")
+        if completed:
+            status_parts.append(f"{completed} Completed")
+
+        summary_text = "Queue: " + (", ".join(status_parts) if status_parts else "0 Tasks")
+        self._summary_label.setText(summary_text)
 
         total_speed = sum(d.get("speed", 0.0) for d in self._task_data.values() if d.get("status") == DownloadStatus.DOWNLOADING.value)
         self._speed_label.setText(f"Total Speed: {format_speed(total_speed)}")
 
-    def _set_row_hover(self, row: int, hovered: bool) -> None:
-        """Update row background color on mouse hover."""
-        if 0 <= row < self._table.rowCount():
-            color = QColor(COLORS.bg_hover) if hovered else QColor(COLORS.bg_window)
-            for c in range(self._table.columnCount()):
-                item = self._table.item(row, c)
-                if item:
-                    item.setBackground(color)
+        # Update Toolbar button states
+        has_active = active_count > 0
+        self._stop_all_btn.setEnabled(has_active)
+        self._pause_resume_all_btn.setEnabled(has_active)
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        """Track mouse movement to smoothly highlight hovered rows."""
-        if obj == self._table.viewport() or isinstance(obj, QWidget):
-            if event.type() == QEvent.Type.MouseMove:
-                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-                if obj != self._table.viewport() and isinstance(obj, QWidget):
-                    pos = obj.mapTo(self._table.viewport(), pos)
-                row = self._table.rowAt(pos.y())
-                if row != self._hovered_row:
-                    if self._hovered_row >= 0:
-                        self._set_row_hover(self._hovered_row, False)
-                    self._hovered_row = row
-                    if self._hovered_row >= 0:
-                        self._set_row_hover(self._hovered_row, True)
-            elif event.type() == QEvent.Type.Leave:
-                if self._hovered_row >= 0:
-                    self._set_row_hover(self._hovered_row, False)
-                    self._hovered_row = -1
-        return super().eventFilter(obj, event)
+        if downloading or queued:
+            self._pause_resume_all_btn.setText("Pause All")
+            self._pause_resume_all_btn.setIcon(create_vector_icon("pause", size=13))
+        elif paused:
+            self._pause_resume_all_btn.setText("Resume All")
+            self._pause_resume_all_btn.setIcon(create_vector_icon("play", size=13))
+        else:
+            self._pause_resume_all_btn.setText("Pause All")
+            self._pause_resume_all_btn.setIcon(create_vector_icon("pause", size=13))
 

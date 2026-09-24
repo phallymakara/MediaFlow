@@ -29,6 +29,7 @@ class AnalyzeWorker(QThread):
         url: str,
         extractor_registry: Optional[ExtractorRegistry] = None,
         parent: Optional[QObject] = None,
+        placeholder_id: str = "",
     ) -> None:
         """Initialize analyze worker.
 
@@ -36,10 +37,12 @@ class AnalyzeWorker(QThread):
             url: Source media link to extract.
             extractor_registry: Extractor registry instance.
             parent: Optional parent QObject.
+            placeholder_id: Optional tracking identifier for UI placeholder row.
         """
         super().__init__(parent)
         self.url = url.strip()
         self.registry = extractor_registry or get_default_registry()
+        self.placeholder_id = placeholder_id
 
     def run(self) -> None:
         """Execute URL validation and extraction on background thread."""

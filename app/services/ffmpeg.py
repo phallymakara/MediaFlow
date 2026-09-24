@@ -143,6 +143,58 @@ class FFmpegService:
             logger.error("FFmpeg muxing failed: %s", exc.stderr)
             raise FFmpegError("Failed to combine audio and video streams.") from exc
 
+    def remux_to_mp4(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> bool:
+        """Remux or transcode media to an Apple-compatible MP4 container with AAC audio.
+
+        Args:
+            input_path: Source media file path.
+            output_path: Destination MP4 file path.
+
+        Returns:
+            True if remuxing succeeded.
+
+        Raises:
+            FFmpegError: If FFmpeg fails or is not available.
+            FileNotFoundError: If input file does not exist.
+        """
+        if not self.is_available():
+            raise FFmpegError("FFmpeg is not available on this system.")
+
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            str(self._ffmpeg_path),
+            "-y",
+            "-i", str(input_path),
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            str(output_path),
+        ]
+
+        logger.debug("Executing FFmpeg remux to MP4: %s", " ".join(cmd))
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                **self._get_subprocess_flags(),
+            )
+            logger.info("Successfully remuxed media to MP4: %s", output_path)
+            return True
+        except subprocess.CalledProcessError as exc:
+            logger.error("FFmpeg remux to MP4 failed: %s", exc.stderr)
+            raise FFmpegError("Failed to remux media file to MP4.") from exc
+
+
     def extract_audio(
         self,
         input_path: Path,

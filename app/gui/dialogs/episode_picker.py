@@ -85,6 +85,18 @@ class EpisodePickerDialog(QDialog):
         deselect_all_btn.clicked.connect(self._deselect_all)
         action_layout.addWidget(deselect_all_btn)
 
+        has_full_series = any(ep.episode_number == 0 or "[Full Series Complete]" in ep.title for ep in self.media_info.episodes)
+        if has_full_series:
+            full_series_btn = QPushButton("Full Series Only", self)
+            full_series_btn.setToolTip("Select only the complete series movie compilation")
+            full_series_btn.clicked.connect(self._select_full_series_only)
+            action_layout.addWidget(full_series_btn)
+
+            episodes_only_btn = QPushButton("Episodes Only", self)
+            episodes_only_btn.setToolTip("Select all individual separate episode videos")
+            episodes_only_btn.clicked.connect(self._select_episodes_only)
+            action_layout.addWidget(episodes_only_btn)
+
         action_layout.addStretch()
         layout.addLayout(action_layout)
 
@@ -100,8 +112,22 @@ class EpisodePickerDialog(QDialog):
         scroll_layout.setContentsMargins(12, 12, 12, 12)
         scroll_layout.setSpacing(8)
 
+        from app.extractors.drama_base import BaseDramaExtractor
+        clean_drama = BaseDramaExtractor.clean_drama_title(self.media_info.title)
+
         for ep in self.media_info.episodes:
-            cb = QCheckBox(f"Episode {ep.episode_number}: {ep.title}", scroll_widget)
+            if ep.episode_number == 0 or "[Full Series Complete]" in ep.title:
+                cb = QCheckBox(f"{ep.title}", scroll_widget)
+                cb.setStyleSheet(f"font-weight: 700; color: {COLORS.accent_primary}; font-size: 13px;")
+                cb.setToolTip("Complete series compilation containing all episodes in one video file.")
+            else:
+                clean_ep = (ep.title or "").strip()
+                if clean_ep.lower().startswith(clean_drama.lower()):
+                    clean_ep = clean_ep[len(clean_drama):].lstrip(" -:_")
+                if clean_ep and not clean_ep.lower().startswith("episode") and clean_ep != f"Ep {ep.episode_number}":
+                    cb = QCheckBox(f"Episode {ep.episode_number}: {clean_ep}", scroll_widget)
+                else:
+                    cb = QCheckBox(f"Episode {ep.episode_number}", scroll_widget)
             cb.setChecked(True)  # Default all selected
             cb.setProperty("episode_data", ep)
             cb.toggled.connect(self._update_summary)
@@ -142,6 +168,21 @@ class EpisodePickerDialog(QDialog):
         """Deselect all episode checkboxes."""
         for cb in self._checkboxes:
             cb.setChecked(False)
+
+    def _select_full_series_only(self) -> None:
+        """Select only the full series compilation."""
+        for cb in self._checkboxes:
+            ep: MediaEpisode = cb.property("episode_data")
+            is_compilation = ep.episode_number == 0 or "[Full Series Complete]" in ep.title
+            cb.setChecked(is_compilation)
+
+    def _select_episodes_only(self) -> None:
+        """Select only individual separate episode rows."""
+        for cb in self._checkboxes:
+            ep: MediaEpisode = cb.property("episode_data")
+            is_compilation = ep.episode_number == 0 or "[Full Series Complete]" in ep.title
+            cb.setChecked(not is_compilation)
+
 
     def _update_summary(self) -> None:
         """Update selected count label and toggle queue button state."""

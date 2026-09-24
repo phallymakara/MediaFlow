@@ -24,10 +24,11 @@ def main() -> None:
     group.add_argument("--days", type=int, help="Number of days until license expiration")
     group.add_argument("--date", type=str, help="Explicit expiration date (YYYY-MM-DD)")
     group.add_argument("--lifetime", action="store_true", help="Generate permanent lifetime license")
-    group.add_argument(
+
+    parser.add_argument(
         "--activate",
         action="store_true",
-        help="Generate a lifetime Pro key and automatically activate the local MediaFlow installation in 1 click",
+        help="Automatically activate the local MediaFlow installation with the generated key",
     )
 
     parser.add_argument("--tier", type=str, default="pro", help="License tier (standard, pro)")
@@ -40,9 +41,12 @@ def main() -> None:
 
     # Determine expiration
     exp_date: date | None = None
-    if args.lifetime or args.activate or (not args.days and not args.date):
-        exp_date = None
-        exp_display = "Lifetime (Permanent)"
+    if args.days:
+        if args.days <= 0:
+            print("Error: --days must be greater than 0.", file=sys.stderr)
+            sys.exit(1)
+        exp_date = (datetime.now() + timedelta(days=args.days)).date()
+        exp_display = f"{exp_date.strftime('%Y-%m-%d')} ({args.days} day{'s' if args.days != 1 else ''})"
     elif args.date:
         try:
             exp_date = datetime.strptime(args.date, "%Y-%m-%d").date()
@@ -50,12 +54,9 @@ def main() -> None:
         except ValueError:
             print("Error: Date must be formatted as YYYY-MM-DD.", file=sys.stderr)
             sys.exit(1)
-    elif args.days:
-        if args.days <= 0:
-            print("Error: --days must be greater than 0.", file=sys.stderr)
-            sys.exit(1)
-        exp_date = (datetime.now() + timedelta(days=args.days)).date()
-        exp_display = f"{exp_date.strftime('%Y-%m-%d')} ({args.days} days)"
+    else:
+        exp_date = None
+        exp_display = "Lifetime (Permanent)"
 
     # Determine Machine ID
     if args.hwid:

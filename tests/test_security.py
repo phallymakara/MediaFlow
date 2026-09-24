@@ -131,10 +131,10 @@ def test_downloader_submit_sanitizes_title(tmp_path: Path) -> None:
         platform="generic",
     )
 
-    downloader.shutdown()
     assert ".." not in task.output_path.name
     assert ":" not in task.output_path.name
-    assert task.output_path.parent == storage.base_download_dir
+    assert ".." not in task.output_path.parent.name
+    assert task.output_path.is_relative_to(storage.base_download_dir)
 
 
 def test_downloader_submit_ssrf_rejection(tmp_path: Path) -> None:

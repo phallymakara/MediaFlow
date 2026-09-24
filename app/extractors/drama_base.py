@@ -45,13 +45,19 @@ class BaseDramaExtractor(BaseExtractor):
     canonical_id_patterns: List[str] = []
     mirror_templates: List[str] = []
 
-    def __init__(self, client: Optional[httpx.Client] = None) -> None:
-        """Initialize drama extractor with optional HTTP client."""
+    def __init__(
+        self,
+        client: Optional[httpx.Client] = None,
+        enable_syndication_search: bool = False,
+    ) -> None:
+        """Initialize drama extractor with optional HTTP client and syndication search."""
         self._client = client or httpx.Client(
             headers=DEFAULT_HEADERS,
             follow_redirects=True,
             timeout=10.0,
         )
+        self.enable_syndication_search = enable_syndication_search
+
 
     def fetch_html(self, url: str, headers: Optional[Dict[str, str]] = None) -> str:
         """Fetch HTML content from a URL safely.
@@ -364,7 +370,12 @@ class BaseDramaExtractor(BaseExtractor):
 
             ep_num = int(ep_num_match.group(1)) if ep_num_match else len(episodes) + 1
             clean_text = re.sub(r'<[^>]+>', '', text).strip()
-            ep_title = clean_text if clean_text else f"Episode {ep_num}"
+            if not clean_text or clean_text.lower() in ("play now", "watch now", "play", "watch", "view", "click here"):
+                ep_title = f"Episode {ep_num}"
+            else:
+                ep_title = clean_text
+
+
 
             episodes.append(
                 MediaEpisode(
@@ -470,6 +481,133 @@ class BaseDramaExtractor(BaseExtractor):
 
         return None
 
+    @staticmethod
+    def clean_drama_title(raw_title: str) -> str:
+        """Extract clean core drama title by stripping platform labels and SEO buzzwords.
+
+        Args:
+            raw_title: Raw title string.
+
+        Returns:
+            Normalized clean drama name.
+        """
+        if not raw_title:
+            return "Untitled Drama"
+        # Split at common delimiters: hyphen, pipe, dash
+        clean = re.sub(r"\s*[-–—|]\s*.*$", "", raw_title).strip()
+        # Remove buzzwords
+        clean = re.sub(
+            r"(?i)\b(?:full\s*movie|full\s*episodes|dramabox|short\s*drama|all\s*episodes|watch\s*free|eng\s*sub)\b",
+            "",
+            clean,
+        ).strip()
+        return clean or raw_title.strip()
+
+    def find_syndicated_compilations(self, clean_title: str) -> List[MediaEpisode]:
+        """Discover publicly syndicated full series / complete compilations across community indexers.
+
+        Args:
+            clean_title: Normalized drama title.
+
+        Returns:
+            List of discovered MediaEpisode instances for complete compilation streams.
+        """
+        if not clean_title or len(clean_title) < 3:
+            return []
+
+        compilations: List[MediaEpisode] = []
+        try:
+            import yt_dlp
+
+            ydl_opts = {
+                "quiet": True,
+                "skip_download": True,
+                "extract_flat": True,
+                "socket_timeout": 8,
+                "no_warnings": True,
+            }
+            STOP_WORDS = {
+                "the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "with",
+                "by", "of", "from", "as", "is", "was", "are", "were", "full", "movie",
+                "drama", "series", "episode", "episodes", "complete", "all", "sub", "eng",
+                "dub", "part", "parts", "dramabox", "short",
+            }
+            clean_words = [w.lower() for w in re.findall(r"[a-z0-9]+", clean_title.lower()) if w not in STOP_WORDS and len(w) > 2]
+            queries = [f"ytsearch3:{clean_title} Full Movie Drama", f"ytsearch2:{clean_title} Full Episodes"]
+            seen_urls = set()
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                for q in queries:
+                    try:
+                        res = ydl.extract_info(q, download=False)
+                        if not res or "entries" not in res:
+                            continue
+
+                        for e in res["entries"]:
+                            if not e or not e.get("url"):
+                                continue
+                            url = e.get("url")
+                            if url in seen_urls:
+                                continue
+                            seen_urls.add(url)
+
+                            # Skip entries that explicitly declare restricted availability
+                            if e.get("availability") in ("needs_auth", "subscriber_only", "unlisted_needs_auth"):
+                                continue
+                            if (e.get("age_limit") or 0) > 0:
+                                continue
+
+                            dur = e.get("duration") or 0
+                            dur_mins = round(dur / 60)
+                            title = e.get("title") or ""
+                            title_lower = title.lower()
+
+                            # Require substantial keyword overlap to prevent false matches
+                            clean_slug = re.sub(r'[^a-z0-9 ]', '', clean_title.lower()).strip()
+                            is_title_match = clean_slug in title_lower if clean_slug else False
+                            matched_words = sum(1 for w in clean_words if w in title_lower)
+                            threshold = max(2, int(len(clean_words) * 0.6)) if clean_words else 1
+                            has_sufficient_keywords = matched_words >= threshold
+
+                            if (is_title_match or has_sufficient_keywords) and (dur >= 600 or "full" in title_lower):
+                                # Verify candidate is publicly accessible without login or age restriction
+                                try:
+                                    ydl.extract_info(url, download=False, process=False)
+                                except Exception as auth_err:
+                                    logger.debug("Skipping restricted syndicated stream %s: %s", url, auth_err)
+                                    continue
+
+                                comp_label = f"[Full Series Complete] {clean_title}"
+                                if dur_mins > 0:
+                                    comp_label += f" ({dur_mins} mins - All Episodes)"
+                                compilations.append(
+                                    MediaEpisode(
+                                        episode_number=0 if not compilations else len(compilations),
+                                        title=comp_label,
+                                        url=url,
+                                        duration_seconds=int(dur) if dur else None,
+                                    )
+                                )
+                                if len(compilations) >= 2:
+                                    break
+                    except Exception as exc:
+                        logger.debug("Syndication query '%s' encountered error: %s", q, exc)
+
+                    if compilations:
+                        break
+
+
+            if compilations:
+                logger.info(
+                    "Syndication index discovered %d complete compilation(s) for '%s'",
+                    len(compilations),
+                    clean_title,
+                )
+        except Exception as exc:
+            logger.debug("Failed querying syndication index for '%s': %s", clean_title, exc)
+
+        return compilations
+
     def extract(self, url: str) -> MediaInfo:
         """Fetch and extract drama metadata, formats, and episodes with mobile and mirror fallbacks.
 
@@ -477,7 +615,8 @@ class BaseDramaExtractor(BaseExtractor):
         1. Fetch desktop HTML and parse OpenGraph, JSON-LD, and embedded state.
         2. If no direct streams found, retry with mobile headers.
         3. If still unresolved, trigger mirror fallback resolver.
-        4. Return normalized MediaInfo.
+        4. Query open syndication & community aggregator index for complete series if locked.
+        5. Return normalized MediaInfo.
 
         Args:
             url: Drama URL to inspect.
@@ -523,6 +662,34 @@ class BaseDramaExtractor(BaseExtractor):
             if mirror_result:
                 return mirror_result
 
+        # Cascade Tier 4: Open Syndication & Aggregator Index Scraper
+        # If episodes have locked previews (/ep/ or 15s) or lack streams, query community index
+        is_locked_drama = any(ep.url and ("15s" in ep.url or "/ep/" in ep.url) for ep in episodes) or not has_real_streams
+        if self.enable_syndication_search and is_locked_drama:
+            clean_drama_name = self.clean_drama_title(meta["title"])
+            compilations = self.find_syndicated_compilations(clean_drama_name)
+            if compilations:
+                episodes = compilations + episodes
+                if not has_real_streams:
+                    formats = [
+                        MediaFormat(
+                            format_id="1080p",
+                            resolution="1080p MP4",
+                            extension="mp4",
+                            note="Full Unlocked Series",
+                            has_video=True,
+                            has_audio=True,
+                        ),
+                        MediaFormat(
+                            format_id="720p",
+                            resolution="720p MP4",
+                            extension="mp4",
+                            note="Full Unlocked Series",
+                            has_video=True,
+                            has_audio=True,
+                        ),
+                    ]
+
         return MediaInfo(
             url=url,
             title=meta["title"],
@@ -532,3 +699,7 @@ class BaseDramaExtractor(BaseExtractor):
             episodes=episodes,
             is_playlist=len(episodes) > 1,
         )
+
+
+DramaBaseExtractor = BaseDramaExtractor
+

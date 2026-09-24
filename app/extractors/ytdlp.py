@@ -101,7 +101,6 @@ class YtDlpExtractor(BaseExtractor):
         ydl_opts: Dict[str, Any] = {
             "skip_download": True,
             "extract_flat": "in_playlist",
-            "playlist_items": "1-100",
             "socket_timeout": 15,
             "quiet": True,
             "no_warnings": True,

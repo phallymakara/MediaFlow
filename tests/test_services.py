@@ -214,6 +214,30 @@ def test_ffmpeg_extract_audio_missing_input_file(tmp_path: Path) -> None:
         service.extract_audio(video, out)
 
 
+def test_ffmpeg_remux_to_mp4_missing_binary(tmp_path: Path) -> None:
+    """Verify remux_to_mp4 raises FFmpegError if binary is unavailable."""
+    service = FFmpegService(ffmpeg_path="/non/existent/ffmpeg.exe")
+    video = tmp_path / "video.webm"
+    video.touch()
+    out = tmp_path / "out.mp4"
+
+    with pytest.raises(FFmpegError):
+        service.remux_to_mp4(video, out)
+
+
+def test_ffmpeg_remux_to_mp4_missing_input_file(tmp_path: Path) -> None:
+    """Verify remux_to_mp4 raises FileNotFoundError if input file does not exist."""
+    service = FFmpegService()
+    service._ffmpeg_path = "mock_ffmpeg"
+
+    video = tmp_path / "missing_video.webm"
+    out = tmp_path / "out.mp4"
+
+    with pytest.raises(FileNotFoundError):
+        service.remux_to_mp4(video, out)
+
+
+
 def test_ffmpeg_probe_media_when_missing(tmp_path: Path) -> None:
     """Verify probe_media returns None when ffprobe binary is unavailable or target file missing."""
     service = FFmpegService(ffprobe_path="/non/existent/ffprobe.exe")
@@ -222,5 +246,37 @@ def test_ffmpeg_probe_media_when_missing(tmp_path: Path) -> None:
 
     assert service.probe_media(dummy_file) is None
     assert service.probe_media(tmp_path / "non_existent.mp4") is None
+
+
+def test_generate_media_folder_name() -> None:
+    """Verify auto-generation of media subfolders with title and timestamp."""
+    from datetime import datetime
+
+    ts = datetime(2026, 9, 24, 14, 30, 45)
+
+    # Standard title and timestamp formatting
+    folder = StorageService.generate_media_folder_name("Spider-Man: Across the Spider-Verse", timestamp=ts)
+    assert folder == "Spider-Man_Across_the_Spider-Verse_2026-09-24_14-30-45"
+
+    # Default timestamp (datetime.now())
+    folder_now = StorageService.generate_media_folder_name("Sample Video")
+    assert folder_now.startswith("Sample_Video_")
+    # Verify timestamp format suffix YYYY-MM-DD_HH-MM-SS
+    suffix = folder_now.replace("Sample_Video_", "")
+    assert len(suffix) == 19
+    assert suffix[4] == "-" and suffix[7] == "-" and suffix[10] == "_" and suffix[13] == "-" and suffix[16] == "-"
+
+    # Neutralize path traversal and illegal chars in folder name
+    evil_folder = StorageService.generate_media_folder_name("../../etc/evil:dir<tag>", timestamp=ts)
+    assert ".." not in evil_folder
+    assert ":" not in evil_folder
+    assert "<" not in evil_folder
+    assert ">" not in evil_folder
+    assert evil_folder == "etc_evil_dir_tag_2026-09-24_14-30-45"
+
+    # Empty or whitespace title fallback
+    empty_folder = StorageService.generate_media_folder_name("   ", timestamp=ts)
+    assert empty_folder == "media_download_2026-09-24_14-30-45"
+
 
 

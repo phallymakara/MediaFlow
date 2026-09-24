@@ -222,3 +222,148 @@ def test_resolve_ytdlp_format() -> None:
     assert resolve_ytdlp_format("bestvideo[height<=720]+bestaudio/best") == "bestvideo[height<=720]+bestaudio/best"
 
 
+def test_task_pause_resume(tmp_path: Path) -> None:
+    """Verify DownloadTask pause and resume behavior."""
+    task = DownloadTask(
+        task_id="task-pause-test",
+        url="https://example.com/pause.mp4",
+        title="Pause Test",
+        platform="Direct",
+        output_path=tmp_path / "pause.mp4",
+        status=DownloadStatus.DOWNLOADING,
+        speed_bytes_sec=1024 * 500,
+    )
+
+    assert task.is_paused is False
+    assert task.status == DownloadStatus.DOWNLOADING
+
+    # Pause task
+    task.pause()
+    assert task.is_paused is True
+    assert task.status == DownloadStatus.PAUSED
+    assert task.speed_bytes_sec == 0.0
+
+    # Resume task
+    task.resume()
+    assert task.is_paused is False
+    assert task.status == DownloadStatus.DOWNLOADING
+
+    # Cancel unblocks paused state
+    task.pause()
+    assert task.is_paused is True
+    task.cancel()
+    assert task.is_paused is False
+    assert task.is_cancelled is True
+    task.set_status(DownloadStatus.CANCELLED)
+    assert task.status == DownloadStatus.CANCELLED
+
+
+def test_downloader_queue_controls(tmp_path: Path) -> None:
+    """Verify Downloader pause_all, resume_all, and cancel_all queue management."""
+    downloader = Downloader(max_concurrent=5)
+
+    task1 = DownloadTask(
+        task_id="t1",
+        url="https://example.com/1.mp4",
+        title="T1",
+        platform="Direct",
+        output_path=tmp_path / "1.mp4",
+        status=DownloadStatus.DOWNLOADING,
+    )
+    task2 = DownloadTask(
+        task_id="t2",
+        url="https://example.com/2.mp4",
+        title="T2",
+        platform="Direct",
+        output_path=tmp_path / "2.mp4",
+        status=DownloadStatus.QUEUED,
+    )
+
+    with downloader._lock:
+        downloader._tasks["t1"] = task1
+        downloader._tasks["t2"] = task2
+
+    # Pause all
+    paused_count = downloader.pause_all()
+    assert paused_count == 2
+    assert task1.status == DownloadStatus.PAUSED
+    assert task2.status == DownloadStatus.PAUSED
+    assert len(downloader.get_active_tasks()) == 2
+
+    # Resume all
+    resumed_count = downloader.resume_all()
+    assert resumed_count == 2
+    assert task1.status == DownloadStatus.DOWNLOADING
+    assert task2.status == DownloadStatus.DOWNLOADING
+
+    # Individual pause / resume
+    assert downloader.pause("t1") is True
+    assert task1.status == DownloadStatus.PAUSED
+    assert downloader.resume("t1") is True
+    assert task1.status == DownloadStatus.DOWNLOADING
+
+    # Cancel all
+    cancelled_count = downloader.cancel_all()
+    assert cancelled_count == 2
+    assert task1.is_cancelled is True
+    assert task2.is_cancelled is True
+
+    downloader.shutdown(wait=False)
+
+
+def test_downloader_auto_subfolder_creation(tmp_path: Path) -> None:
+    """Verify submit auto-creates folder with title and datetime inside base_download_dir."""
+    dl_dir = tmp_path / "custom_videos"
+    storage = StorageService(base_download_dir=dl_dir)
+    downloader = Downloader(storage_service=storage)
+
+    task = downloader.submit(
+        url="https://example.com/movie.mp4",
+        title="Epic Adventure Movie",
+        platform="Direct",
+    )
+
+    # Output path must be inside a dedicated subfolder of dl_dir
+    assert task.output_path.parent != dl_dir
+    assert task.output_path.parent.parent == dl_dir
+    assert task.output_path.parent.name.startswith("Epic_Adventure_Movie_")
+    assert task.output_path.parent.is_dir()
+    assert task.output_path.name == "Epic_Adventure_Movie.mp4"
+
+    downloader.shutdown(wait=False)
+
+
+def test_downloader_explicit_subfolder_grouping(tmp_path: Path) -> None:
+    """Verify multiple episodes with a shared subfolder are grouped in the same directory."""
+    dl_dir = tmp_path / "drama_downloads"
+    storage = StorageService(base_download_dir=dl_dir)
+    downloader = Downloader(storage_service=storage)
+
+    session_folder = "The_Lost_CEO_2026-09-24_12-00-00"
+
+    task_ep1 = downloader.submit(
+        url="https://example.com/ep1.mp4",
+        title="The Lost CEO - Ep 01",
+        platform="DramaBox",
+        subfolder=session_folder,
+    )
+
+    task_ep2 = downloader.submit(
+        url="https://example.com/ep2.mp4",
+        title="The Lost CEO - Ep 02",
+        platform="DramaBox",
+        subfolder=session_folder,
+    )
+
+    # Both episodes must share the exact same subfolder
+    assert task_ep1.output_path.parent == dl_dir / session_folder
+    assert task_ep2.output_path.parent == dl_dir / session_folder
+    assert task_ep1.output_path.parent == task_ep2.output_path.parent
+    assert task_ep1.output_path.name == "The_Lost_CEO_-_Ep_01.mp4"
+    assert task_ep2.output_path.name == "The_Lost_CEO_-_Ep_02.mp4"
+
+    downloader.shutdown(wait=False)
+
+
+
+

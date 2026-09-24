@@ -336,3 +336,49 @@ def test_multi_mirror_rotation_succeeds_on_second_mirror() -> None:
     assert len(media_info.formats) > 0
     assert len(media_info.episodes) == 1
     assert "netshortdb.com" in media_info.url
+
+
+def test_clean_drama_title() -> None:
+    """Verify stripping of marketing buzzwords, domain tags, and delimiters."""
+    raw = "Deny Me, Dragon King full movie-Deny Me, Dragon King full episodes-DramaBox"
+    assert DramaBoxExtractor.clean_drama_title(raw) == "Deny Me, Dragon King"
+
+    raw2 = "Run, Mommy! Daddy Is Coming! | Short Drama All Episodes"
+    assert DramaBoxExtractor.clean_drama_title(raw2) == "Run, Mommy! Daddy Is Coming!"
+
+    raw3 = "The Lost CEO & Heiress - Eng Sub Watch Free"
+    assert DramaBoxExtractor.clean_drama_title(raw3) == "The Lost CEO & Heiress"
+
+
+def test_find_syndicated_compilations_mocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify syndication search parses flat search results into complete series episodes."""
+    mock_entries = [
+        {
+            "title": "Deny Me, Dragon King Full Movie (All Episodes)",
+            "url": "https://example.com/watch?v=sample1",
+            "duration": 6000,
+        },
+        {
+            "title": "Unrelated Minecraft Video",
+            "url": "https://example.com/watch?v=sample2",
+            "duration": 500,
+        },
+    ]
+
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = {"entries": mock_entries}
+    mock_ydl.__enter__.return_value = mock_ydl
+
+    import yt_dlp
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", lambda *args, **kwargs: mock_ydl)
+
+    extractor = DramaBoxExtractor()
+    comps = extractor.find_syndicated_compilations("Deny Me, Dragon King")
+
+    assert len(comps) == 1
+    assert comps[0].episode_number == 0
+    assert "[Full Series Complete]" in comps[0].title
+    assert "Deny Me, Dragon King" in comps[0].title
+    assert comps[0].url == "https://example.com/watch?v=sample1"
+    assert comps[0].duration_seconds == 6000
+

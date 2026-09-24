@@ -16,6 +16,7 @@ class DownloadStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    PAUSED = "paused"
 
 
 @dataclass
@@ -39,7 +40,7 @@ class DownloadRecord:
     id: Optional[int] = None
 
     def __post_init__(self) -> None:
-        """Ensure timestamps and status types are normalized."""
+        """Ensure timestamps and status types are normalized and only lightweight metadata is stored."""
         now_iso = datetime.now(timezone.utc).isoformat()
         if not self.created_at:
             self.created_at = now_iso
@@ -47,6 +48,16 @@ class DownloadRecord:
             self.updated_at = now_iso
         if isinstance(self.status, str) and not isinstance(self.status, DownloadStatus):
             self.status = DownloadStatus(self.status)
+
+        # Enforce lightweight storage: discard heavy base64/data URIs and truncate excessive strings
+        if self.thumbnail_url and (self.thumbnail_url.startswith("data:") or len(self.thumbnail_url) > 1000):
+            self.thumbnail_url = None
+        if self.error_message and len(self.error_message) > 500:
+            self.error_message = self.error_message[:500]
+        if self.title and len(self.title) > 500:
+            self.title = self.title[:500]
+        if self.url and len(self.url) > 2048:
+            self.url = self.url[:2048]
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "DownloadRecord":

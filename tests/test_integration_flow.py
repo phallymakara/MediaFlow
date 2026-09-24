@@ -20,7 +20,7 @@ from app.services.metadata import MetadataService
 from app.services.storage import StorageService
 
 
-def test_complete_pipeline_flow(tmp_path: Path) -> None:
+def test_complete_pipeline_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate full end-to-end flow: config -> registry -> extraction -> storage -> download -> persistence."""
 
     # 1. Step 1: Configuration
@@ -81,6 +81,9 @@ def test_complete_pipeline_flow(tmp_path: Path) -> None:
     mock_resp.headers = {"content-length": "46"}
     mock_resp.iter_bytes.return_value = [b"video_data_chunk_part1_", b"video_data_chunk_part2_"]
     mock_client.stream.return_value.__enter__.return_value = mock_resp
+
+    # Intercept any background worker HTTP clients
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: mock_client)
 
     progress_events = []
 

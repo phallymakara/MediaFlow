@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -93,6 +94,22 @@ class StorageService:
             clean_stem = clean_stem[:max_stem_length].rstrip(" ._")
 
         return f"{clean_stem}{clean_ext}"
+
+    @staticmethod
+    def generate_media_folder_name(title: str, timestamp: Optional[datetime] = None) -> str:
+        """Generate a safe, unique folder name containing media title and date-time.
+
+        Args:
+            title: Media title or series name.
+            timestamp: Optional datetime object, defaults to local datetime.now().
+
+        Returns:
+            Sanitized folder name string in format '{sanitized_title}_{YYYY-MM-DD_HH-MM-SS}'.
+        """
+        now = timestamp or datetime.now()
+        time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+        safe_title = StorageService.sanitize_filename(title, max_length=150) or "media"
+        return f"{safe_title}_{time_str}"
 
     def get_destination_path(self, filename: str, subfolder: Optional[str] = None) -> Path:
         """Resolve a destination file path within the base download directory.

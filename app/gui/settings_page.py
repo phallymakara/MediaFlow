@@ -357,10 +357,11 @@ class SettingsPage(QWidget):
         self.repo.set(KEY_MAX_CONCURRENT, str(concurrency))
         self.repo.set(KEY_FFMPEG_PATH, ffmpeg_val)
 
-        # Apply live concurrency to Downloader instance if available
+        # Apply live concurrency and storage directory to Downloader instance if available
         if self.downloader:
             self.downloader.set_max_concurrent(concurrency)
-            logger.info("Updated live Downloader worker pool concurrency to %d", concurrency)
+            self.downloader.storage.base_download_dir = Path(dir_result).resolve()
+            logger.info("Updated live Downloader worker pool concurrency to %d and storage to %s", concurrency, dir_result)
 
         payload = {
             KEY_DOWNLOAD_DIR: dir_result,

@@ -12,7 +12,7 @@ class ThemeColors:
     bg_surface_alt: str = "#1b1b1f"
     bg_input: str = "#222227"
     bg_hover: str = "#27272a"
-    bg_selected: str = "#2f2f36"
+    bg_selected: str = "#33353c"
 
     border_subtle: str = "#2e2e33"
     border_focus: str = "#2563eb"
@@ -281,15 +281,16 @@ def get_application_stylesheet() -> str:
         border-radius: 6px;
         gridline-color: transparent;
         selection-background-color: {COLORS.bg_selected};
-        selection-color: {COLORS.text_primary};
+        selection-color: #ffffff;
         outline: none;
     }}
 
     QTableWidget::item, QTableView::item {{
-        background-color: {COLORS.bg_window};
+        background-color: transparent;
         color: {COLORS.text_primary};
         padding: 6px 10px;
-        border-bottom: 1px solid {COLORS.bg_surface_alt};
+        border: none;
+        border-bottom: 1px solid {COLORS.border_subtle};
     }}
 
     QTableWidget::item:hover, QTableView::item:hover {{
@@ -298,15 +299,15 @@ def get_application_stylesheet() -> str:
 
     QTableWidget::item:selected, QTableView::item:selected {{
         background-color: {COLORS.bg_selected};
-        color: {COLORS.text_primary};
+        color: #ffffff;
     }}
 
-    QTableWidget QWidget {{
+    QTableWidget QWidget, QTableView QWidget {{
         background-color: transparent;
         color: {COLORS.text_primary};
     }}
 
-    QTableWidget QLabel {{
+    QTableWidget QLabel, QTableView QLabel {{
         background-color: transparent;
     }}
 

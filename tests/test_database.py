@@ -226,3 +226,21 @@ def test_concurrent_database_access(db_manager: DatabaseManager) -> None:
     assert len(results) == 20
     all_records = repo.get_all(limit=100)
     assert len(all_records) == 20
+
+
+def test_download_record_payload_sanitization() -> None:
+    """Verify DownloadRecord rejects heavy data URIs and bounds string sizes."""
+    # Data URI (e.g. embedded base64 image or video data) must be discarded
+    record = DownloadRecord(
+        task_id="t-heavy",
+        url="https://example.com/test",
+        title="A" * 1000,
+        platform="Test",
+        output_path="/tmp/test.mp4",
+        thumbnail_url="data:image/jpeg;base64," + "A" * 5000,
+        error_message="E" * 2000,
+    )
+
+    assert record.thumbnail_url is None
+    assert len(record.title) == 500
+    assert len(record.error_message) == 500

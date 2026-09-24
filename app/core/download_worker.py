@@ -32,8 +32,8 @@ def resolve_ytdlp_format(format_spec: Optional[str]) -> str:
     """Resolve user-facing format label or quality string into a resilient yt-dlp format selector.
 
     Handles UI presets like '1080p MP4', '720p MP4', 'Audio Only MP3', as well as raw
-    format IDs with sensible fallbacks to ensure downloads never fail due to
-    unmatched format constraints.
+    format IDs with sensible fallbacks to ensure downloads prioritize Apple/QuickTime-compatible
+    H.264/AAC MP4 streams.
     """
     if not format_spec or not format_spec.strip():
         return "bestvideo+bestaudio/best"
@@ -48,21 +48,19 @@ def resolve_ytdlp_format(format_spec: Optional[str]) -> str:
     if "audio" in spec_lower or spec_lower in ("mp3", "m4a", "aac", "wav", "flac"):
         return "bestaudio/best"
 
-    if "2160" in spec_lower or "4k" in spec_lower:
-        return "bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best"
-    if "1440" in spec_lower or "2k" in spec_lower:
-        return "bestvideo[height<=1440]+bestaudio/best[height<=1440]/bestvideo+bestaudio/best"
-    if "1080" in spec_lower:
-        return "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
-    if "720" in spec_lower:
-        return "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best"
-    if "480" in spec_lower:
-        return "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best"
-    if "360" in spec_lower:
-        return "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best"
+    for res in ("2160", "1440", "1080", "720", "480", "360"):
+        if res in spec_lower:
+            return (
+                f"bestvideo[height<={res}][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a][acodec^=mp4a]/"
+                f"bestvideo[height<={res}][ext=mp4]+bestaudio[ext=m4a]/"
+                f"bestvideo[height<={res}]+bestaudio/best[height<={res}]/"
+                f"bestvideo+bestaudio/best"
+            )
 
     if spec_lower in ("best", "best quality", "best quality (auto)", "auto", "default"):
         return "bestvideo+bestaudio/best"
+
+    return "bestvideo+bestaudio/best"
 
     # For any unrecognized or custom format identifier, try it first then fallback to best
     return f"{spec}/bestvideo+bestaudio/best"
@@ -100,6 +98,9 @@ class DownloadWorker:
         Returns:
             The Path to the final downloaded file, or None if cancelled or failed.
         """
+        while self.task.is_paused and not self.task.is_cancelled:
+            time.sleep(0.2)
+
         if self.task.is_cancelled:
             self._handle_cancellation(None)
             return None
@@ -181,6 +182,12 @@ class DownloadWorker:
                     if self.task.is_cancelled:
                         raise DownloadCancelledException()
 
+                    while self.task.is_paused and not self.task.is_cancelled:
+                        time.sleep(0.2)
+
+                    if self.task.is_cancelled:
+                        raise DownloadCancelledException()
+
                     if chunk:
                         downloaded += len(chunk)
                         if downloaded > max_bytes:
@@ -219,6 +226,12 @@ class DownloadWorker:
             if self.task.is_cancelled:
                 raise DownloadCancelledException()
 
+            while self.task.is_paused and not self.task.is_cancelled:
+                time.sleep(0.2)
+
+            if self.task.is_cancelled:
+                raise DownloadCancelledException()
+
             if d.get("status") == "downloading":
                 downloaded = d.get("downloaded_bytes") or 0
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -254,6 +267,8 @@ class DownloadWorker:
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }]
+        elif not is_audio and temp_path.suffix.lower() == ".mp4":
+            ydl_opts["merge_output_format"] = "mp4"
 
         # If custom ffmpeg path exists, provide to yt-dlp
         if self.ffmpeg and self.ffmpeg.is_available() and self.ffmpeg._ffmpeg_path:
@@ -270,7 +285,23 @@ class DownloadWorker:
         if matching_files:
             actual_temp = matching_files[0]
             if actual_temp != temp_path:
-                actual_temp.rename(temp_path)
+                if (
+                    actual_temp.suffix.lower() in (".webm", ".mkv")
+                    and temp_path.suffix.lower() == ".mp4"
+                    and self.ffmpeg
+                    and self.ffmpeg.is_available()
+                ):
+                    try:
+                        self.ffmpeg.remux_to_mp4(actual_temp, temp_path)
+                        actual_temp.unlink(missing_ok=True)
+                    except Exception as exc:
+                        logger.warning("Remux to MP4 failed, falling back to original extension: %s", exc)
+                        fallback_path = temp_path.with_suffix(actual_temp.suffix)
+                        actual_temp.rename(fallback_path)
+                        self.task.output_path = self.task.output_path.with_suffix(actual_temp.suffix)
+                else:
+                    actual_temp.rename(temp_path)
+
 
     def _handle_cancellation(self, temp_path: Optional[Path]) -> None:
         """Clean up partial files and mark task as cancelled."""
@@ -299,10 +330,16 @@ class DownloadWorker:
                 pass
 
         error_message = "Download failed due to a network or connection issue."
+        exc_str = str(exc).lower()
         if isinstance(exc, httpx.HTTPStatusError):
             error_message = f"Server returned error code {exc.response.status_code}."
         elif isinstance(exc, ValueError):
             error_message = str(exc)
+        elif "sign in to confirm your age" in exc_str or "age-restricted" in exc_str:
+            error_message = "Video is age-restricted on YouTube and requires sign-in authentication."
+        elif "private video" in exc_str:
+            error_message = "Video is private or restricted by its uploader."
+
 
         self.task.set_status(DownloadStatus.FAILED, error_message=error_message)
         self._sync_db_status()

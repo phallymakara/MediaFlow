@@ -39,6 +39,11 @@ def test_status_badge_styles_all_states() -> None:
     assert canc_style.text == "CANCELLED"
     assert canc_style.border_color == COLORS.border_subtle
 
+    # Paused
+    paused_style = get_status_badge_style(DownloadStatus.PAUSED)
+    assert paused_style.text == "PAUSED"
+    assert paused_style.border_color == COLORS.status_warning
+
     # Queued
     q_style = get_status_badge_style(DownloadStatus.QUEUED)
     assert q_style.text == "QUEUED"

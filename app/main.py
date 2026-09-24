@@ -147,7 +147,10 @@ def main() -> None:
     db_manager = DatabaseManager(db_path=config.db_path)
     download_repo = DownloadRepository(db_manager=db_manager)
     settings_repo = SettingsRepository(db_manager=db_manager)
-    storage_service = StorageService()
+    saved_download_dir = settings_repo.get("download_dir")
+    storage_service = StorageService(
+        base_download_dir=Path(saved_download_dir).resolve() if saved_download_dir else None
+    )
     ffmpeg_service = FFmpegService()
     license_service = LicenseService(settings_repo=settings_repo)
     extractor_registry = get_default_registry()

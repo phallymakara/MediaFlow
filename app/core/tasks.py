@@ -30,6 +30,7 @@ class DownloadTask:
     error_message: Optional[str] = None
 
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    pause_event: threading.Event = field(default_factory=threading.Event)
     on_progress: Optional[Callable[["DownloadTask"], None]] = None
     on_status_change: Optional[Callable[["DownloadTask", DownloadStatus, DownloadStatus], None]] = None
 
@@ -44,6 +45,11 @@ class DownloadTask:
     def is_cancelled(self) -> bool:
         """Return True if cancellation has been requested."""
         return self.cancel_event.is_set()
+
+    @property
+    def is_paused(self) -> bool:
+        """Return True if pause has been requested."""
+        return self.pause_event.is_set()
 
     def update_progress(
         self,
@@ -103,8 +109,25 @@ class DownloadTask:
             except Exception as exc:
                 logger.error("Error in on_status_change callback: %s", exc)
 
+    def pause(self) -> None:
+        """Signal this task to pause download execution."""
+        if self.status in (DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING):
+            self.pause_event.set()
+            self.speed_bytes_sec = 0.0
+            self.set_status(DownloadStatus.PAUSED)
+            logger.info("Task %s paused", self.task_id)
+
+    def resume(self) -> None:
+        """Resume execution of this paused task."""
+        if self.is_paused or self.status == DownloadStatus.PAUSED:
+            self.pause_event.clear()
+            self.set_status(DownloadStatus.DOWNLOADING)
+            logger.info("Task %s resumed", self.task_id)
+
     def cancel(self) -> None:
         """Request cooperative cancellation of this download."""
         self.cancel_event.set()
+        self.pause_event.clear()  # Ensure paused worker unblocks to complete cancellation
+        self.speed_bytes_sec = 0.0
         logger.info("Cancellation requested for task %s", self.task_id)
 

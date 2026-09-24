@@ -51,6 +51,7 @@ class Downloader:
         title: str,
         platform: str,
         output_path: Optional[Path] = None,
+        subfolder: Optional[str] = None,
         format_id: Optional[str] = None,
         quality: Optional[str] = None,
         thumbnail_url: Optional[str] = None,
@@ -64,6 +65,8 @@ class Downloader:
             title: Title of the media.
             platform: Platform name string.
             output_path: Target destination path on disk.
+            subfolder: Optional subfolder inside base download directory. If None and output_path
+                is not specified, an automatic subfolder containing title and datetime is generated.
             format_id: Format identifier.
             quality: Quality label.
             thumbnail_url: Preview thumbnail link.
@@ -80,7 +83,8 @@ class Downloader:
         if output_path is None:
             safe_title = self.storage.sanitize_filename(title) or "media"
             clean_filename = f"{safe_title}.mp4"
-            dest_candidate = self.storage.get_destination_path(clean_filename)
+            target_subfolder = subfolder if subfolder is not None else self.storage.generate_media_folder_name(title)
+            dest_candidate = self.storage.get_destination_path(clean_filename, subfolder=target_subfolder)
             output_path = self.storage.get_unique_destination_path(dest_candidate)
 
         task = DownloadTask(
@@ -102,13 +106,14 @@ class Downloader:
         # Persist task to database if repository is configured
         if self.repo:
             try:
+                clean_thumb = thumbnail_url if thumbnail_url and not thumbnail_url.startswith("data:") and len(thumbnail_url) <= 1000 else None
                 record = DownloadRecord(
                     task_id=task.task_id,
                     url=task.url,
                     title=task.title,
                     platform=task.platform,
                     output_path=str(task.output_path),
-                    thumbnail_url=thumbnail_url,
+                    thumbnail_url=clean_thumb,
                     file_format=output_path.suffix.lstrip("."),
                     quality=quality,
                     status=DownloadStatus.QUEUED,
@@ -148,17 +153,98 @@ class Downloader:
             return True
         return False
 
+    def pause(self, task_id: str) -> bool:
+        """Pause a specific active or queued task by ID.
+
+        Args:
+            task_id: Task UUID.
+
+        Returns:
+            True if task was found and paused.
+        """
+        task = self.get_task(task_id)
+        if task:
+            task.pause()
+            return True
+        return False
+
+    def resume(self, task_id: str) -> bool:
+        """Resume a specific paused task by ID.
+
+        Args:
+            task_id: Task UUID.
+
+        Returns:
+            True if task was found and resumed.
+        """
+        task = self.get_task(task_id)
+        if task:
+            task.resume()
+            return True
+        return False
+
+    def pause_all(self) -> int:
+        """Pause all active and queued download tasks.
+
+        Returns:
+            Number of tasks paused.
+        """
+        count = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status in (DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING):
+                    task.pause()
+                    count += 1
+        logger.info("Paused %d active tasks", count)
+        return count
+
+    def resume_all(self) -> int:
+        """Resume all paused download tasks.
+
+        Returns:
+            Number of tasks resumed.
+        """
+        count = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status == DownloadStatus.PAUSED or task.is_paused:
+                    task.resume()
+                    count += 1
+        logger.info("Resumed %d paused tasks", count)
+        return count
+
+    def cancel_all(self) -> int:
+        """Cancel all active, queued, or paused download tasks.
+
+        Returns:
+            Number of tasks cancelled.
+        """
+        count = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status in (
+                    DownloadStatus.QUEUED,
+                    DownloadStatus.DOWNLOADING,
+                    DownloadStatus.PROCESSING,
+                    DownloadStatus.PAUSED,
+                ):
+                    task.cancel()
+                    count += 1
+        logger.info("Cancelled %d active tasks", count)
+        return count
+
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
         """Retrieve in-memory task by ID."""
         with self._lock:
             return self._tasks.get(task_id)
 
     def get_active_tasks(self) -> List[DownloadTask]:
-        """Return list of active, downloading, or processing tasks."""
+        """Return list of active, downloading, processing, or paused tasks."""
         active_statuses = (
             DownloadStatus.QUEUED,
             DownloadStatus.DOWNLOADING,
             DownloadStatus.PROCESSING,
+            DownloadStatus.PAUSED,
         )
         with self._lock:
             return [t for t in self._tasks.values() if t.status in active_statuses]
@@ -188,7 +274,11 @@ class Downloader:
         logger.info("Shutting down downloader pool...")
         with self._lock:
             for task in self._tasks.values():
-                if task.status in (DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING):
+                if task.status in (
+                    DownloadStatus.QUEUED,
+                    DownloadStatus.DOWNLOADING,
+                    DownloadStatus.PAUSED,
+                ):
                     task.cancel()
         self._executor.shutdown(wait=wait)
 

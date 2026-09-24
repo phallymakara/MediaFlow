@@ -40,6 +40,11 @@ def get_status_badge_style(
         border_color = COLORS.status_info
         text_color = "#93c5fd"
         default_text = "DOWNLOADING"
+    elif status_key == "analyzing":
+        bg_color = COLORS.status_info_bg
+        border_color = COLORS.status_info
+        text_color = "#93c5fd"
+        default_text = "ANALYZING"
     elif status_key == DownloadStatus.COMPLETED.value:
         bg_color = COLORS.status_success_bg
         border_color = COLORS.status_success
@@ -60,6 +65,11 @@ def get_status_badge_style(
         border_color = COLORS.border_subtle
         text_color = COLORS.text_muted
         default_text = "CANCELLED"
+    elif status_key == DownloadStatus.PAUSED.value:
+        bg_color = COLORS.status_warning_bg
+        border_color = COLORS.status_warning
+        text_color = "#fde047"
+        default_text = "PAUSED"
     else:  # QUEUED or default
         bg_color = COLORS.bg_surface
         border_color = COLORS.border_subtle
