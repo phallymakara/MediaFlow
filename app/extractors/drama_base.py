@@ -389,6 +389,66 @@ class BaseDramaExtractor(BaseExtractor):
         episodes.sort(key=lambda ep: ep.episode_number)
         return episodes
 
+    def probe_sequential_cdn_episodes(
+        self,
+        base_stream_url: str,
+        detected_episodes: List[MediaEpisode],
+        max_probe: int = 10,
+    ) -> List[MediaEpisode]:
+        """Probe consecutive CDN stream endpoints when initial episode index is detected.
+
+        Args:
+            base_stream_url: Verified playable stream URL for the initial episode.
+            detected_episodes: Existing list of discovered episodes.
+            max_probe: Maximum number of subsequent episodes to probe.
+
+        Returns:
+            Updated list of MediaEpisode items with discovered sequential streams.
+        """
+        if not base_stream_url or len(detected_episodes) > 1:
+            return detected_episodes
+
+        match = re.search(r'(ep[_-]?|episode[_-]?|[_-])(\d+)(\.m3u8|\.mp4)', base_stream_url, re.IGNORECASE)
+        if not match:
+            return detected_episodes
+
+        prefix, num_str, ext = match.group(1), match.group(2), match.group(3)
+        try:
+            start_num = int(num_str)
+        except ValueError:
+            return detected_episodes
+
+        num_len = len(num_str)
+        probed = list(detected_episodes)
+        existing_urls = {ep.url for ep in probed}
+
+        for i in range(1, max_probe + 1):
+            next_num = start_num + i
+            formatted_num = f"{next_num:0{num_len}d}"
+            next_target = f"{prefix}{formatted_num}{ext}"
+            next_url = base_stream_url.replace(match.group(0), next_target)
+
+            if next_url in existing_urls:
+                continue
+
+            try:
+                resp = self._client.head(next_url, timeout=3.0)
+                if resp.status_code == 200:
+                    probed.append(
+                        MediaEpisode(
+                            episode_number=next_num,
+                            title=f"Episode {next_num}",
+                            url=next_url,
+                        )
+                    )
+                    existing_urls.add(next_url)
+                else:
+                    break
+            except Exception:
+                break
+
+        return probed
+
     def extract_canonical_id(self, url: str) -> Optional[str]:
         """Extract canonical drama ID from URL using platform patterns or common query parameters.
 
@@ -655,6 +715,27 @@ class BaseDramaExtractor(BaseExtractor):
                     episodes = mobile_episodes
             except Exception as exc:
                 logger.debug("Mobile profile fallback request failed for %s: %s", url, exc)
+
+        # Cascade Tier 2b: Headless browser sniffer fallback for dynamic players
+        if not has_real_streams:
+            try:
+                from app.services.browser_sniffer import BrowserSnifferService
+                sniffed_streams = BrowserSnifferService.sniff_media_streams(url)
+                if sniffed_streams:
+                    sniffed_formats = self.find_video_streams(html_content, url, embedded_streams=sniffed_streams)
+                    if any(fmt.format_id != "default" for fmt in sniffed_formats):
+                        formats = sniffed_formats
+                        has_real_streams = True
+            except Exception as exc:
+                logger.debug("Browser sniffer fallback encountered an issue for %s: %s", url, exc)
+
+        # Probe sequential CDN streams if only 1 episode is currently discovered
+        if has_real_streams and len(episodes) <= 1:
+            first_stream = next((fmt.format_id for fmt in formats if fmt.format_id.startswith("http")), "")
+            if not first_stream and state.get("streams"):
+                first_stream = state["streams"][0]
+            if first_stream:
+                episodes = self.probe_sequential_cdn_episodes(first_stream, episodes)
 
         # Cascade Tier 3: Mirror fallback resolver
         if not has_real_streams or not episodes:

@@ -51,3 +51,5 @@ Desktop.ini
 # Downloads and temporary files
 downloads/
 *.temp
+snapkey/
+.DS_Store

@@ -90,6 +90,7 @@ class DownloadWorker:
         self.storage = storage_service
         self.ffmpeg = ffmpeg_service
         self.repo = repository
+        self._custom_client = http_client is not None
         self._client = http_client or httpx.Client(follow_redirects=True, timeout=15.0)
 
     def execute(self) -> Optional[Path]:
@@ -153,8 +154,46 @@ class DownloadWorker:
         return any(clean_url.split("?")[0].endswith(ext) for ext in direct_exts)
 
     def _download_direct_stream(self, temp_path: Path) -> None:
-        """Stream direct media file to disk in chunks with cancellation support."""
+        """Stream direct media or HLS playlist to disk with cancellation support."""
         logger.debug("Streaming direct media for task %s to %s", self.task.task_id, temp_path)
+
+        is_hls = ".m3u8" in self.task.url.lower().split("?")[0]
+        if not self._custom_client or is_hls:
+            try:
+                from app.services.async_downloader import AsyncDownloaderService, AsyncDownloadCancelled
+
+                last_sync_time = time.time()
+
+                def progress_callback(downloaded: int, total: int, speed: float, eta: Optional[int]):
+                    nonlocal last_sync_time
+                    self.task.update_progress(
+                        downloaded_bytes=downloaded,
+                        total_bytes=total,
+                        speed=speed,
+                        eta=eta,
+                    )
+                    now = time.time()
+                    if now - last_sync_time >= 1.0:
+                        self._sync_db_progress()
+                        last_sync_time = now
+
+                downloader = AsyncDownloaderService(concurrency=6, ffmpeg_service=self.ffmpeg)
+                downloader.download(
+                    url=self.task.url,
+                    dest_path=temp_path,
+                    progress_callback=progress_callback,
+                    is_cancelled_callback=lambda: self.task.is_cancelled,
+                    is_paused_callback=lambda: self.task.is_paused,
+                )
+                self._sync_db_progress()
+                return
+            except AsyncDownloadCancelled:
+                raise DownloadCancelledException()
+            except Exception as async_err:
+                if is_hls:
+                    raise
+                logger.debug("Async downloader failed (%s), falling back to standard stream.", async_err)
+
         config = get_config()
         max_bytes = config.max_download_bytes
 

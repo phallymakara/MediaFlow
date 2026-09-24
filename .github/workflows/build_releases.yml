@@ -1,0 +1,86 @@
+name: Build & Package Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target_name: MediaFlow-Windows-x64.exe
+          - os: macos-14
+            arch: arm64 (Apple Silicon)
+            target_name: MediaFlow-macOS-AppleSilicon-arm64.dmg
+          - os: macos-13
+            arch: x64 (Intel)
+            target_name: MediaFlow-macOS-Intel-x64.dmg
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv Package Manager
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Project Dependencies & PyInstaller
+        run: |
+          uv pip install --system -e .
+          uv pip install --system pyinstaller
+
+      # Build for Windows
+      - name: Build Windows Executable
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --noconfirm mediaflow.spec
+          Move-Item -Path "dist\MediaFlow.exe" -Destination "dist\${{ matrix.target_name }}"
+
+      # Build for macOS
+      - name: Build macOS App & DMG
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm mediaflow.spec
+          # Create DMG containing the .app bundle
+          hdiutil create -volname "MediaFlow" -srcfolder "dist/MediaFlow.app" -ov -format UDZO "dist/${{ matrix.target_name }}"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target_name }}
+          path: dist/${{ matrix.target_name }}
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish Release with Installers
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
