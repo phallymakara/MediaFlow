@@ -1,6 +1,7 @@
 """Browser sniffer service for dynamic media stream interception using Playwright."""
 
 import logging
+import os
 from typing import List, Optional
 
 from app.services.network import redact_url_for_logging, validate_outbound_url
@@ -65,12 +66,38 @@ class BrowserSnifferService:
         detected_streams: List[str] = []
         safe_url = redact_url_for_logging(validated_url)
 
+        candidate_browsers = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        ]
+        executable_path = next((p for p in candidate_browsers if os.path.exists(p)), None)
+
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
-                )
+                launch_kwargs = {
+                    "headless": True,
+                    "args": ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+                }
+                if executable_path:
+                    launch_kwargs["executable_path"] = executable_path
+
+                try:
+                    browser = p.chromium.launch(**launch_kwargs)
+                except Exception as launch_err:
+                    if executable_path:
+                        logger.debug("Custom executable launch failed (%s), trying default chromium.", launch_err)
+                        launch_kwargs.pop("executable_path", None)
+                        browser = p.chromium.launch(**launch_kwargs)
+                    else:
+                        raise launch_err
                 try:
                     context = browser.new_context(
                         user_agent=(

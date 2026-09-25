@@ -118,6 +118,13 @@ class DownloadWorker:
         ext = self.task.output_path.suffix or ".mp4"
         temp_path = self.storage.get_temp_path(prefix=self.task.task_id, extension=ext)
 
+        # Resolve TikTok shortdrama URL to stream or canonical video URL
+        if "tiktok.com" in self.task.url.lower() and "shortdrama" in self.task.url.lower():
+            resolved = self._resolve_tiktok_shortdrama_url(self.task.url)
+            if resolved:
+                logger.info("Resolved TikTok short drama URL %s -> %s", self.task.url, resolved)
+                self.task.url = resolved
+
         try:
             if self._is_direct_stream(self.task.url):
                 self._download_direct_stream(temp_path)
@@ -146,6 +153,34 @@ class DownloadWorker:
         except Exception as exc:
             self._handle_failure(temp_path, exc)
             return None
+
+    def _resolve_tiktok_shortdrama_url(self, url: str) -> Optional[str]:
+        """Resolve a TikTok short drama URL to its canonical stream or video URL."""
+        try:
+            from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
+            extractor = TikTokShortDramaExtractor(enable_syndication_search=False)
+            drama_id, ep_num = extractor.extract_drama_id_and_episode(url)
+            if not drama_id:
+                return None
+            episodes = extractor.fetch_all_episodes(drama_id)
+            target_ep = ep_num or 1
+            for idx, item in enumerate(episodes, start=1):
+                drama_video_data = item.get("dramaInfo", {}).get("DramaVideoData", {}) if isinstance(item.get("dramaInfo"), dict) else {}
+                cur_ep = drama_video_data.get("EpisodeNumber") or idx
+                if cur_ep == target_ep:
+                    author = item.get("author", {}).get("uniqueId") or "" if isinstance(item.get("author"), dict) else ""
+                    item_id = str(item.get("id") or "")
+                    if item_id:
+                        author_slug = f"@{author}" if author else "@tiktok"
+                        return f"https://www.tiktok.com/{author_slug}/video/{item_id}"
+                    video_obj = item.get("video", {}) if isinstance(item.get("video"), dict) else {}
+                    play_addr = video_obj.get("playAddr") or ""
+                    if play_addr and isinstance(play_addr, str) and play_addr.startswith("http"):
+                        return play_addr
+                    break
+        except Exception as exc:
+            logger.debug("Failed resolving TikTok short drama URL %s: %s", url, exc)
+        return None
 
     def _is_direct_stream(self, url: str) -> bool:
         """Determine if URL points directly to an accessible video/audio file."""
@@ -294,9 +329,34 @@ class DownloadWorker:
             "progress_hooks": [progress_hook],
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 15,
+            "socket_timeout": 30,
+            "retries": 10,
+            "fragment_retries": 10,
+            "file_access_retries": 5,
             "max_filesize": config.max_download_bytes,
         }
+
+        # Resolve cookies file via CookieService for thread-safe, non-blocking auth
+        from app.services.cookie_service import CookieService
+
+        cookie_file = CookieService.resolve_effective_cookies_file(repo=self.repo)
+        if cookie_file:
+            ydl_opts["cookiefile"] = cookie_file
+            logger.debug("Using cookies file for yt-dlp: %s", cookie_file)
+        else:
+            saved_browser = ""
+            try:
+                from app.database.database import DatabaseManager
+                from app.database.repository import SettingsRepository
+                db_mgr = self.repo.db if self.repo and hasattr(self.repo, "db") else DatabaseManager()
+                saved_browser = SettingsRepository(db_mgr).get("cookies_browser") or ""
+            except Exception:
+                pass
+
+            cookies_browser = saved_browser or os.environ.get("MEDIAFLOW_COOKIES_BROWSER")
+            if cookies_browser:
+                ydl_opts["cookiesfrombrowser"] = CookieService.parse_browser_spec(cookies_browser)
+                logger.debug("Using browser cookies for yt-dlp: %s", cookies_browser)
 
         # Check if user requested audio-only and ffmpeg is available
         is_audio = "audio" in (self.task.format_id or "").lower() or (self.task.quality or "").lower().startswith("audio")
@@ -313,8 +373,45 @@ class DownloadWorker:
         if self.ffmpeg and self.ffmpeg.is_available() and self.ffmpeg._ffmpeg_path:
             ydl_opts["ffmpeg_location"] = str(Path(self.ffmpeg._ffmpeg_path).parent)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([self.task.url])
+        max_attempts = 3
+        transient_error_keywords = (
+            "403",
+            "forbidden",
+            "unable to download webpage",
+            "timed out",
+            "timeout",
+            "100004",
+            "tls connect error",
+            "ssl",
+            "429",
+            "too many requests",
+            "500",
+            "502",
+            "503",
+            "504",
+            "connection reset",
+            "broken pipe",
+        )
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([self.task.url])
+                break
+            except Exception as exc:
+                err_text = str(exc).lower()
+                if attempt < max_attempts and any(k in err_text for k in transient_error_keywords):
+                    logger.warning(
+                        "Download hit transient network issue (%s) for task %s, retrying with backoff (attempt %d/%d)...",
+                        str(exc)[:80], self.task.task_id, attempt, max_attempts,
+                    )
+                    time.sleep(2.0 * attempt)
+                    if any(k in err_text for k in ("403", "forbidden", "cookie")):
+                        refreshed = CookieService.resolve_effective_cookies_file(repo=self.repo, force_refresh=True)
+                        if refreshed:
+                            ydl_opts["cookiefile"] = refreshed
+                            ydl_opts.pop("cookiesfrombrowser", None)
+                    continue
+                raise
 
         # yt-dlp may append its own extension; find the resulting temp file
         temp_dir = temp_path.parent
@@ -376,8 +473,28 @@ class DownloadWorker:
             error_message = str(exc)
         elif "sign in to confirm your age" in exc_str or "age-restricted" in exc_str:
             error_message = "Video is age-restricted on YouTube and requires sign-in authentication."
-        elif "private video" in exc_str:
-            error_message = "Video is private or restricted by its uploader."
+        elif "403" in exc_str and "forbidden" in exc_str and "tiktok" in (self.task.url or "").lower():
+            error_message = (
+                "TikTok access forbidden (403). Cookies may have failed to load or session expired. "
+                "Please verify browser cookies in Settings."
+            )
+        elif "ip address is blocked" in exc_str or "10204" in exc_str or ("no video formats found" in exc_str and "tiktok" in (self.task.url or "").lower()):
+            error_message = (
+                "TikTok requires login authentication for short drama episodes. "
+                "Please export cookies.txt or configure your browser in Settings."
+            )
+        elif "100004" in exc_str:
+            error_message = (
+                "TikTok reported video temporarily unavailable (status code 100004). "
+                "This usually indicates temporary CDN rate-limiting from batch downloading. Retrying will succeed."
+            )
+        elif "timed out" in exc_str or "timeout" in exc_str:
+            error_message = (
+                "Download timed out due to high network traffic or concurrency. "
+                "Retrying the download or lowering concurrent downloads in Settings will resolve this."
+            )
+        elif "no video formats found" in exc_str:
+            error_message = "No downloadable video formats found. This video may require authentication cookies."
 
 
         self.task.set_status(DownloadStatus.FAILED, error_message=error_message)

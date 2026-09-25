@@ -7,11 +7,14 @@ import pytest
 from app.database.database import DatabaseManager
 from app.database.repository import SettingsRepository
 from app.gui.settings_page import (
+    KEY_COOKIES_BROWSER,
+    KEY_COOKIES_FILE,
     KEY_DOWNLOAD_DIR,
     KEY_FFMPEG_PATH,
     KEY_MAX_CONCURRENT,
     clamp_concurrency,
     resolve_ffmpeg_status,
+    validate_cookies_file,
     validate_download_directory,
 )
 
@@ -89,6 +92,45 @@ def test_resolve_ffmpeg_status_custom_missing(tmp_path: Path) -> None:
     assert "not found" in desc.lower()
 
 
+def test_validate_cookies_file_empty() -> None:
+    """Verify empty or None cookie file path is considered valid (optional)."""
+    is_valid, resolved = validate_cookies_file("")
+    assert is_valid
+    assert resolved == ""
+
+    is_valid_none, resolved_none = validate_cookies_file(None)
+    assert is_valid_none
+    assert resolved_none == ""
+
+
+def test_validate_cookies_file_valid(tmp_path: Path) -> None:
+    """Verify valid existing cookie file passes validation."""
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n.tiktok.com\tTRUE\t/\tTRUE\t0\tttwid\t12345\n")
+
+    is_valid, resolved = validate_cookies_file(str(cookie_file))
+    assert is_valid
+    assert Path(resolved).resolve() == cookie_file.resolve()
+
+
+def test_validate_cookies_file_missing(tmp_path: Path) -> None:
+    """Verify non-existent cookies file is rejected with clear error message."""
+    missing = tmp_path / "missing_cookies.txt"
+    is_valid, msg = validate_cookies_file(str(missing))
+    assert not is_valid
+    assert "not found" in msg.lower()
+
+
+def test_validate_cookies_file_directory(tmp_path: Path) -> None:
+    """Verify directory path is rejected when expecting cookie file."""
+    cookie_dir = tmp_path / "cookie_folder"
+    cookie_dir.mkdir()
+
+    is_valid, msg = validate_cookies_file(str(cookie_dir))
+    assert not is_valid
+    assert "directory, not a file" in msg.lower()
+
+
 def test_settings_repository_persistence(tmp_path: Path) -> None:
     """Verify keys are stored and retrieved from SQLite repository."""
     db_file = tmp_path / "test_settings.db"
@@ -99,14 +141,21 @@ def test_settings_repository_persistence(tmp_path: Path) -> None:
     assert repo.get(KEY_DOWNLOAD_DIR, "default_dir") == "default_dir"
     assert repo.get(KEY_MAX_CONCURRENT, "3") == "3"
     assert repo.get(KEY_FFMPEG_PATH, "") == ""
+    assert repo.get(KEY_COOKIES_FILE, "") == ""
+    assert repo.get(KEY_COOKIES_BROWSER, "") == ""
 
     # Set new values
     test_dir = str(tmp_path / "my_downloads")
+    test_cookies = str(tmp_path / "my_cookies.txt")
     repo.set(KEY_DOWNLOAD_DIR, test_dir)
     repo.set(KEY_MAX_CONCURRENT, "5")
     repo.set(KEY_FFMPEG_PATH, "C:/tools/ffmpeg.exe")
+    repo.set(KEY_COOKIES_FILE, test_cookies)
+    repo.set(KEY_COOKIES_BROWSER, "chrome")
 
     # Read back
     assert repo.get(KEY_DOWNLOAD_DIR) == test_dir
     assert repo.get(KEY_MAX_CONCURRENT) == "5"
     assert repo.get(KEY_FFMPEG_PATH) == "C:/tools/ffmpeg.exe"
+    assert repo.get(KEY_COOKIES_FILE) == test_cookies
+    assert repo.get(KEY_COOKIES_BROWSER) == "chrome"

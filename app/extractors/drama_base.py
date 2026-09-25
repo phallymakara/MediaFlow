@@ -591,9 +591,14 @@ class BaseDramaExtractor(BaseExtractor):
                 "by", "of", "from", "as", "is", "was", "are", "were", "full", "movie",
                 "drama", "series", "episode", "episodes", "complete", "all", "sub", "eng",
                 "dub", "part", "parts", "dramabox", "short",
+                "và", "của", "là", "có", "cho", "với", "trong", "các", "những", "tập", "trọn", "bộ",
             }
-            clean_words = [w.lower() for w in re.findall(r"[a-z0-9]+", clean_title.lower()) if w not in STOP_WORDS and len(w) > 2]
-            queries = [f"ytsearch3:{clean_title} Full Movie Drama", f"ytsearch2:{clean_title} Full Episodes"]
+            clean_words = [w.lower() for w in re.findall(r"\w+", clean_title.lower()) if w not in STOP_WORDS and len(w) > 1]
+            queries = [
+                f"ytsearch3:{clean_title} Full Movie Drama",
+                f"ytsearch2:{clean_title} Full Episodes",
+                f"ytsearch2:{clean_title} trọn bộ",
+            ]
             seen_urls = set()
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -623,13 +628,13 @@ class BaseDramaExtractor(BaseExtractor):
                             title_lower = title.lower()
 
                             # Require substantial keyword overlap to prevent false matches
-                            clean_slug = re.sub(r'[^a-z0-9 ]', '', clean_title.lower()).strip()
+                            clean_slug = re.sub(r'[^\w\s]', '', clean_title.lower()).strip()
                             is_title_match = clean_slug in title_lower if clean_slug else False
                             matched_words = sum(1 for w in clean_words if w in title_lower)
-                            threshold = max(2, int(len(clean_words) * 0.6)) if clean_words else 1
+                            threshold = max(2, int(len(clean_words) * 0.5)) if len(clean_words) >= 3 else 1
                             has_sufficient_keywords = matched_words >= threshold
 
-                            if (is_title_match or has_sufficient_keywords) and (dur >= 600 or "full" in title_lower):
+                            if (is_title_match or has_sufficient_keywords) and (dur >= 600 or "full" in title_lower or "trọn bộ" in title_lower):
                                 # Verify candidate is publicly accessible without login or age restriction
                                 try:
                                     ydl.extract_info(url, download=False, process=False)

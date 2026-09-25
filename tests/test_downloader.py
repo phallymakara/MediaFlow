@@ -365,5 +365,26 @@ def test_downloader_explicit_subfolder_grouping(tmp_path: Path) -> None:
     downloader.shutdown(wait=False)
 
 
+def test_download_worker_tiktok_auth_error_message(tmp_path: Path) -> None:
+    """Verify TikTok IP block / login error produces actionable user guidance."""
+    task = DownloadTask(
+        task_id="tiktok-task-1",
+        url="https://www.tiktok.com/@destinystonedrama/video/7675414926252379413",
+        title="Thần Y Hạ Sơn",
+        platform="TikTok",
+        output_path=tmp_path / "tiktok_test.mp4",
+    )
+    storage = StorageService(base_download_dir=tmp_path)
+    worker = DownloadWorker(task=task, storage_service=storage)
+
+    # Simulate TikTok 10204 / IP block error
+    tiktok_exc = Exception("ERROR: [TikTok] 7675414926252379413: Your IP address is blocked from accessing this post")
+    worker._handle_failure(None, tiktok_exc)
+
+    assert task.status == DownloadStatus.FAILED
+    assert "cookies.txt" in task.error_message
+    assert "Settings" in task.error_message
+
+
 
 

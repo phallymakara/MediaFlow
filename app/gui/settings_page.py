@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -33,6 +34,35 @@ logger = logging.getLogger(__name__)
 KEY_DOWNLOAD_DIR = "download_dir"
 KEY_MAX_CONCURRENT = "max_concurrent_downloads"
 KEY_FFMPEG_PATH = "ffmpeg_path"
+KEY_COOKIES_FILE = "cookies_file"
+KEY_COOKIES_BROWSER = "cookies_browser"
+
+
+def validate_cookies_file(cookies_path: Optional[str]) -> Tuple[bool, str]:
+    """Validate optional Netscape cookies.txt file path.
+
+    Args:
+        cookies_path: Path string to test, or None/empty.
+
+    Returns:
+        Tuple of (is_valid, error_or_resolved_path).
+    """
+    if not cookies_path or not cookies_path.strip():
+        return True, ""
+
+    try:
+        p = Path(cookies_path.strip()).expanduser().resolve()
+        if not p.exists():
+            return False, f"Cookies file not found: {p}"
+        if not p.is_file():
+            return False, f"Target path is a directory, not a file: {p}"
+
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            f.read(512)
+
+        return True, str(p)
+    except Exception as exc:
+        return False, f"Cannot read cookies file: {exc}"
 
 
 def clamp_concurrency(val: Any) -> int:
@@ -282,6 +312,84 @@ class SettingsPage(QWidget):
         ffmpeg_hint.setObjectName("captionText")
         layout.addWidget(ffmpeg_hint)
 
+        layout.addWidget(self._create_divider())
+
+        # Section 4: Authentication & Cookies (cookies.txt)
+        sec4_header = QLabel("Authentication & Cookies", self)
+        sec4_header.setObjectName("sectionHeader")
+        layout.addWidget(sec4_header)
+
+        cookies_status_row = QHBoxLayout()
+        cookies_status_row.setSpacing(10)
+        cookies_lbl = QLabel("Cookies Status:", self)
+        cookies_status_row.addWidget(cookies_lbl)
+
+        self._cookies_status_badge = QLabel("Not Configured", self)
+        self._cookies_status_badge.setStyleSheet(
+            f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+            f"color: {COLORS.text_muted}; background-color: {COLORS.bg_surface_alt};"
+        )
+        cookies_status_row.addWidget(self._cookies_status_badge)
+
+        self._cookies_desc_label = QLabel(self)
+        self._cookies_desc_label.setObjectName("captionText")
+        cookies_status_row.addWidget(self._cookies_desc_label, 1)
+
+        layout.addLayout(cookies_status_row)
+
+        # Auto-detect from installed browser
+        browser_row = QHBoxLayout()
+        browser_row.setSpacing(12)
+        browser_lbl = QLabel("Auto-detect Browser:", self)
+        browser_row.addWidget(browser_lbl)
+
+        self._browser_combo = QComboBox(self)
+        self._browser_combo.addItem("Disabled (Use manual cookies.txt / Off)", "")
+        self._browser_combo.addItem("Google Chrome", "chrome")
+        self._browser_combo.addItem("Microsoft Edge", "edge")
+        self._browser_combo.addItem("Mozilla Firefox", "firefox")
+        self._browser_combo.addItem("Brave Browser", "brave")
+        self._browser_combo.addItem("Apple Safari", "safari")
+        self._browser_combo.currentIndexChanged.connect(self._on_browser_changed)
+        browser_row.addWidget(self._browser_combo)
+        browser_row.addStretch()
+        layout.addLayout(browser_row)
+
+        manual_cookie_lbl = QLabel("Or specify cookies.txt file manually:", self)
+        manual_cookie_lbl.setObjectName("captionText")
+        layout.addWidget(manual_cookie_lbl)
+
+        cookies_row = QHBoxLayout()
+        cookies_row.setSpacing(8)
+
+        self._cookies_input = QLineEdit(self)
+        self._cookies_input.setPlaceholderText("Path to exported cookies.txt (e.g. ~/Downloads/cookies.txt)")
+        self._cookies_input.textChanged.connect(self._on_cookies_text_changed)
+        cookies_row.addWidget(self._cookies_input, 1)
+
+        browse_cookies_btn = QPushButton("Browse...", self)
+        browse_cookies_btn.setIcon(create_vector_icon("folder", size=14))
+        browse_cookies_btn.clicked.connect(self._on_browse_cookies)
+        cookies_row.addWidget(browse_cookies_btn)
+
+        clear_cookies_btn = QPushButton("Clear", self)
+        clear_cookies_btn.clicked.connect(self._on_clear_cookies)
+        cookies_row.addWidget(clear_cookies_btn)
+
+        layout.addLayout(cookies_row)
+
+        self._cookies_error_label = QLabel(self)
+        self._cookies_error_label.setStyleSheet(f"color: {COLORS.status_danger}; font-size: 11px;")
+        self._cookies_error_label.hide()
+        layout.addWidget(self._cookies_error_label)
+
+        cookies_hint = QLabel(
+            "Auto-detect reads cookies directly from your browser, or specify an exported Netscape cookies.txt to download login-gated TikTok dramas and private videos.",
+            self,
+        )
+        cookies_hint.setObjectName("captionText")
+        layout.addWidget(cookies_hint)
+
         layout.addStretch(1)
 
         # Footer Actions
@@ -332,7 +440,18 @@ class SettingsPage(QWidget):
         saved_ffmpeg = self.repo.get(KEY_FFMPEG_PATH, config.ffmpeg_path)
         self._ffmpeg_input.setText(saved_ffmpeg or "")
 
+        # Browser auto-detection
+        saved_browser = self.repo.get(KEY_COOKIES_BROWSER, "")
+        idx = self._browser_combo.findData(saved_browser)
+        if idx >= 0:
+            self._browser_combo.setCurrentIndex(idx)
+
+        # Cookies file
+        saved_cookies = self.repo.get(KEY_COOKIES_FILE, "")
+        self._cookies_input.setText(saved_cookies or "")
+
         self._update_ffmpeg_indicator(saved_ffmpeg)
+        self._update_cookies_indicator(saved_cookies, saved_browser)
 
     def save_settings(self) -> bool:
         """Validate and persist current settings to SQLite repository.
@@ -349,13 +468,38 @@ class SettingsPage(QWidget):
             return False
 
         self._dir_error_label.hide()
+
+        cookies_candidate = self._cookies_input.text().strip()
+        is_valid_cookies, cookies_result = validate_cookies_file(cookies_candidate)
+        if not is_valid_cookies:
+            self._cookies_error_label.setText(cookies_result)
+            self._cookies_error_label.show()
+            self._show_footer_status("Please fix configuration errors above.", is_error=True)
+            return False
+
+        self._cookies_error_label.hide()
+
         concurrency = clamp_concurrency(self._concurrency_spinbox.value())
         ffmpeg_val = self._ffmpeg_input.text().strip()
+        browser_val = self._browser_combo.currentData() or ""
 
         # Persist to database
         self.repo.set(KEY_DOWNLOAD_DIR, dir_result)
         self.repo.set(KEY_MAX_CONCURRENT, str(concurrency))
         self.repo.set(KEY_FFMPEG_PATH, ffmpeg_val)
+        self.repo.set(KEY_COOKIES_FILE, cookies_result)
+        self.repo.set(KEY_COOKIES_BROWSER, browser_val)
+
+        # If a browser is selected and no manual cookie file is set, export cookies in background
+        if browser_val and not cookies_result:
+            import threading
+            from app.services.cookie_service import CookieService
+
+            threading.Thread(
+                target=CookieService.export_browser_cookies,
+                args=(browser_val,),
+                daemon=True,
+            ).start()
 
         # Apply live concurrency and storage directory to Downloader instance if available
         if self.downloader:
@@ -367,11 +511,14 @@ class SettingsPage(QWidget):
             KEY_DOWNLOAD_DIR: dir_result,
             KEY_MAX_CONCURRENT: concurrency,
             KEY_FFMPEG_PATH: ffmpeg_val,
+            KEY_COOKIES_FILE: cookies_result,
+            KEY_COOKIES_BROWSER: browser_val,
         }
         self.settings_saved.emit(payload)
 
         self._show_footer_status("Settings saved successfully.", is_error=False)
         self._update_ffmpeg_indicator(ffmpeg_val)
+        self._update_cookies_indicator(cookies_result, browser_val)
         return True
 
     def restore_defaults(self) -> None:
@@ -381,8 +528,11 @@ class SettingsPage(QWidget):
         self._concurrency_slider.setValue(clamp_concurrency(config.max_concurrent_downloads))
         self._concurrency_spinbox.setValue(clamp_concurrency(config.max_concurrent_downloads))
         self._ffmpeg_input.setText(config.ffmpeg_path)
+        self._browser_combo.setCurrentIndex(0)
+        self._cookies_input.setText("")
         self._clear_inline_errors()
         self._update_ffmpeg_indicator(config.ffmpeg_path)
+        self._update_cookies_indicator("", "")
         self._show_footer_status("Defaults restored. Click 'Save Settings' to apply.", is_error=False)
 
     def _on_browse_directory(self) -> None:
@@ -448,10 +598,88 @@ class SettingsPage(QWidget):
             )
         self._ffmpeg_desc_label.setText(desc)
 
+    def _on_browse_cookies(self) -> None:
+        """Open system file picker to select cookies.txt file."""
+        current_val = self._cookies_input.text().strip() or str(Path.home())
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Netscape cookies.txt File",
+            current_val,
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if selected:
+            self._cookies_input.setText(str(Path(selected).resolve()))
+            self._clear_inline_errors()
+            self._update_cookies_indicator(self._cookies_input.text())
+
+    def _on_clear_cookies(self) -> None:
+        """Clear the cookies file input."""
+        self._cookies_input.setText("")
+        self._clear_inline_errors()
+        self._update_cookies_indicator("")
+
+    def _on_browser_changed(self) -> None:
+        """Update cookies indicator when user selects a browser."""
+        browser_val = self._browser_combo.currentData() or ""
+        cookies_val = self._cookies_input.text().strip()
+        self._update_cookies_indicator(cookies_val, browser_val)
+
+    def _on_cookies_text_changed(self) -> None:
+        """Update cookies indicator as user types or edits path."""
+        browser_val = self._browser_combo.currentData() or ""
+        candidate = self._cookies_input.text().strip()
+        self._update_cookies_indicator(candidate, browser_val)
+
+    def _update_cookies_indicator(
+        self,
+        custom_path: Optional[str] = None,
+        browser: Optional[str] = None,
+    ) -> None:
+        """Update visual badge and description for cookies status."""
+        active_browser = browser if browser is not None else (self._browser_combo.currentData() or "")
+        active_path = custom_path if custom_path is not None else self._cookies_input.text().strip()
+
+        if active_browser:
+            browser_name = self._browser_combo.currentText()
+            self._cookies_status_badge.setText("Active (Browser)")
+            self._cookies_status_badge.setStyleSheet(
+                f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+                f"color: #ffffff; background-color: {COLORS.status_success};"
+            )
+            self._cookies_desc_label.setText(f"Auto-detecting cookies from {browser_name}")
+            return
+
+        if not active_path:
+            self._cookies_status_badge.setText("Not Configured")
+            self._cookies_status_badge.setStyleSheet(
+                f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+                f"color: {COLORS.text_muted}; background-color: {COLORS.bg_surface_alt};"
+            )
+            self._cookies_desc_label.setText("Optional. Configure to download login-gated videos.")
+            return
+
+        is_valid, resolved = validate_cookies_file(active_path)
+        if is_valid:
+            self._cookies_status_badge.setText("Active (File)")
+            self._cookies_status_badge.setStyleSheet(
+                f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+                f"color: #ffffff; background-color: {COLORS.status_success};"
+            )
+            self._cookies_desc_label.setText(f"Loaded: {resolved}")
+        else:
+            self._cookies_status_badge.setText("Invalid File")
+            self._cookies_status_badge.setStyleSheet(
+                f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+                f"color: #ffffff; background-color: {COLORS.status_warning};"
+            )
+            self._cookies_desc_label.setText(resolved)
+
     def _clear_inline_errors(self) -> None:
         """Clear visible inline validation errors."""
         self._dir_error_label.hide()
         self._dir_error_label.setText("")
+        self._cookies_error_label.hide()
+        self._cookies_error_label.setText("")
 
     def _show_footer_status(self, text: str, is_error: bool = False) -> None:
         """Display an inline status message in the footer."""

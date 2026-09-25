@@ -12,6 +12,7 @@ from app.extractors.freereels import FreeReelsExtractor
 from app.extractors.goodshort import GoodShortExtractor
 from app.extractors.netshort import NetShortExtractor
 from app.extractors.stardusttv import StardustTVExtractor
+from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
 from app.extractors.ytdlp import YtDlpExtractor
 from app.services.network import redact_url_for_logging, validate_outbound_url
 
@@ -136,6 +137,7 @@ def get_default_registry() -> ExtractorRegistry:
     registry.register(GoodShortExtractor(), priority=24)
     registry.register(DramaWaveExtractor(), priority=25)
     registry.register(FreeReelsExtractor(), priority=26)
+    registry.register(TikTokShortDramaExtractor(), priority=27)
 
     # Register yt-dlp as universal fallback with default priority (100)
     registry.register(YtDlpExtractor(), priority=100)

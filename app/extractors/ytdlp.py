@@ -48,11 +48,14 @@ class YtDlpExtractor(BaseExtractor):
             return False
 
         netloc = parsed.netloc.lower()
+        path = parsed.path.lower()
+        if ("tiktok.com" in netloc or "tiktokv.com" in netloc) and "shortdrama" in path:
+            return False
+
         if any(domain in netloc for domain in SUPPORTED_DOMAINS):
             return True
 
         # Check for direct media URL extensions
-        path = parsed.path.lower()
         if any(path.endswith(ext) for ext in DIRECT_EXTENSIONS):
             return True
 
