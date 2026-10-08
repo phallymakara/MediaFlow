@@ -160,16 +160,19 @@ def test_tiktok_shortdrama_extract_mocked() -> None:
 
     assert info.episodes[0].episode_number == 1
     assert info.episodes[0].title == "Episode 1"
-    assert info.episodes[0].url == "https://www.tiktok.com/@destinystonedrama/video/7684287404030643477"
+    assert info.episodes[0].url == "https://v16-webapp-prime.tiktok.com/stream_ep1.mp4"
     assert info.episodes[0].duration_seconds == 70
 
     assert info.episodes[1].episode_number == 2
     assert info.episodes[1].title == "Episode 2"
-    assert info.episodes[1].url == "https://www.tiktok.com/@destinystonedrama/video/7684287393393904917"
+    assert info.episodes[1].url == "https://v16-webapp-prime.tiktok.com/stream_ep2.mp4"
 
     assert info.episodes[2].episode_number == 3
     assert info.episodes[2].title == "Episode 3"
-    assert info.episodes[2].url == "https://www.tiktok.com/@destinystonedrama/video/7684287396866788629"
+    assert info.episodes[2].url == "https://v16-webapp-prime.tiktok.com/stream_ep3.mp4"
+
+    # Verify cached video ID stream mapping
+    assert TikTokShortDramaExtractor.get_cached_video_stream("7684287404030643477") == "https://v16-webapp-prime.tiktok.com/stream_ep1.mp4"
 
     # Verify standard formats are present
     format_ids = [f.format_id for f in info.formats]

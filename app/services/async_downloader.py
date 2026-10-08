@@ -100,6 +100,8 @@ class AsyncDownloaderService:
             ),
             "Accept": "*/*",
         }
+        if "tiktok" in url.lower():
+            headers["Referer"] = "https://www.tiktok.com/"
 
         async with aiohttp.ClientSession(
             connector=connector, timeout=timeout, headers=headers

@@ -34,9 +34,22 @@ TIKTOK_DRAMA_PATTERN = re.compile(
 class TikTokShortDramaExtractor(BaseDramaExtractor):
     """Custom extractor for TikTok Short Drama (tiktok.com/shortdrama/...) series and episodes."""
 
+    _VIDEO_STREAM_CACHE: Dict[str, str] = {}
+
     canonical_id_patterns: List[str] = [
         r'/shortdrama(?:/episode)?(?:/[a-zA-Z_-]+)?/(\d+)',
     ]
+
+    @classmethod
+    def cache_video_stream(cls, video_id: str, stream_url: str) -> None:
+        """Cache direct stream URL for a given TikTok video ID."""
+        if video_id and stream_url:
+            cls._VIDEO_STREAM_CACHE[str(video_id)] = stream_url
+
+    @classmethod
+    def get_cached_video_stream(cls, video_id: str) -> Optional[str]:
+        """Retrieve direct stream URL for a TikTok video ID if cached."""
+        return cls._VIDEO_STREAM_CACHE.get(str(video_id))
 
     def __init__(
         self,
@@ -50,7 +63,7 @@ class TikTokShortDramaExtractor(BaseDramaExtractor):
                 headers=DEFAULT_HEADERS,
                 cookies=jar,
                 follow_redirects=True,
-                timeout=10.0,
+                timeout=25.0,
             )
         super().__init__(client=client, enable_syndication_search=enable_syndication_search)
 
@@ -263,6 +276,7 @@ class TikTokShortDramaExtractor(BaseDramaExtractor):
             # Check for direct stream URLs
             ep_direct_url = ""
             video_obj = item.get("video", {}) if isinstance(item.get("video"), dict) else {}
+
             play_addr = video_obj.get("playAddr") or ""
             if play_addr and isinstance(play_addr, str) and play_addr.startswith("http"):
                 ep_direct_url = play_addr
@@ -275,7 +289,7 @@ class TikTokShortDramaExtractor(BaseDramaExtractor):
                             if isinstance(p_addr, dict):
                                 urls = p_addr.get("UrlList") or p_addr.get("urlList") or []
                                 for u in urls:
-                                    if isinstance(u, str) and u.startswith("http"):
+                                    if isinstance(u, str) and u.startswith("http") and not any(bad in u for bad in ("v16m.", "v16-webapp-prime")):
                                         ep_direct_url = u
                                         break
                         if ep_direct_url:
@@ -283,14 +297,16 @@ class TikTokShortDramaExtractor(BaseDramaExtractor):
 
             if ep_direct_url:
                 direct_stream_candidates.append(ep_direct_url)
+                if item_id:
+                    self.cache_video_stream(item_id, ep_direct_url)
 
-            # Build canonical episode URL - prioritize permanent TikTok post URL
+            # Build downloadable episode URL - prioritize direct CDN stream to bypass web scrape bot protection
             author_handle = author or (item.get("author", {}).get("uniqueId") if isinstance(item.get("author"), dict) else "")
-            if item_id:
+            if ep_direct_url:
+                ep_url = ep_direct_url
+            elif item_id:
                 author_slug = f"@{author_handle}" if author_handle else "@tiktok"
                 ep_url = f"https://www.tiktok.com/{author_slug}/video/{item_id}"
-            elif ep_direct_url:
-                ep_url = ep_direct_url
             else:
                 ep_url = f"https://www.tiktok.com/shortdrama/episode/{drama_id}/{ep_num}"
 

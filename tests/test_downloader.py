@@ -386,5 +386,55 @@ def test_download_worker_tiktok_auth_error_message(tmp_path: Path) -> None:
     assert "Settings" in task.error_message
 
 
+def test_download_worker_is_direct_stream(tmp_path: Path) -> None:
+    """Verify _is_direct_stream detects standard media and CDN video stream URLs."""
+    task = DownloadTask(
+        task_id="t-stream",
+        url="https://example.com/test.mp4",
+        title="Test",
+        platform="Direct",
+        output_path=tmp_path / "test.mp4",
+    )
+    worker = DownloadWorker(task=task, storage_service=StorageService(base_download_dir=tmp_path))
+
+    # Standard direct streams
+    assert worker._is_direct_stream("https://example.com/video.mp4") is True
+    assert worker._is_direct_stream("https://example.com/video.m3u8") is True
+    assert worker._is_direct_stream("https://example.com/video.mp4?auth=123") is True
+
+    # TikTok CDN streams
+    cdn_url = "https://v45.tiktokcdn.com/abc/video/tos/alisg/xyz/?a=1180&mime_type=video_mp4&btag=e000"
+    assert worker._is_direct_stream(cdn_url) is True
+
+    prime_url = "https://v16-webapp-prime.tiktok.com/video/tos/abc/?mime_type=video_mp4"
+    assert worker._is_direct_stream(prime_url) is True
+
+    # Non-direct web URLs
+    assert worker._is_direct_stream("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is False
+    assert worker._is_direct_stream("https://www.tiktok.com/@destinystonedrama/video/7675414926252379413") is False
+
+
+def test_download_worker_resolves_cached_tiktok_video_url(tmp_path: Path) -> None:
+    """Verify DownloadWorker resolves TikTok video URLs from cache to bypass web scraping."""
+    from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
+
+    vid_id = "7675414926252379413"
+    stream_url = "https://v45.tiktokcdn.com/test_stream.mp4"
+    TikTokShortDramaExtractor.cache_video_stream(vid_id, stream_url)
+
+    task = DownloadTask(
+        task_id="t-tiktok",
+        url=f"https://www.tiktok.com/@destinystonedrama/video/{vid_id}",
+        title="Ep 01",
+        platform="TikTok",
+        output_path=tmp_path / "test.mp4",
+    )
+    worker = DownloadWorker(task=task, storage_service=StorageService(base_download_dir=tmp_path))
+
+    resolved = worker._resolve_tiktok_video_url(task.url)
+    assert resolved == stream_url
+
+
+
 
 

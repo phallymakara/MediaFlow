@@ -159,3 +159,51 @@ def test_settings_repository_persistence(tmp_path: Path) -> None:
     assert repo.get(KEY_FFMPEG_PATH) == "C:/tools/ffmpeg.exe"
     assert repo.get(KEY_COOKIES_FILE) == test_cookies
     assert repo.get(KEY_COOKIES_BROWSER) == "chrome"
+
+
+def test_settings_page_scroll_area_and_component_structure(tmp_path: Path) -> None:
+    """Verify that SettingsPage integrates a responsive QScrollArea and word-wrapped labels."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+    from app.gui.settings_page import SettingsPage
+
+    app = QApplication.instance() or QApplication([])
+
+    db_file = tmp_path / "test_gui_settings.db"
+    db_manager = DatabaseManager(db_path=db_file)
+    repo = SettingsRepository(db_manager=db_manager)
+
+    page = SettingsPage(repository=repo)
+
+    # Verify QScrollArea exists and is properly configured
+    assert hasattr(page, "_scroll_area")
+    assert isinstance(page._scroll_area, QScrollArea)
+    assert page._scroll_area.widgetResizable() is True
+    assert page._scroll_area.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert page._scroll_area.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+    # Verify inner content widget is attached to scroll area
+    scroll_content = page._scroll_area.widget()
+    assert scroll_content is not None
+    assert scroll_content.objectName() == "settingsScrollContent"
+
+    # Verify key interactive inputs have minimum height to avoid squishing
+    assert page._dir_input.minimumHeight() >= 36
+    assert page._ffmpeg_input.minimumHeight() >= 36
+    assert page._cookies_input.minimumHeight() >= 36
+    assert page._browser_combo.minimumHeight() >= 36
+    assert page._concurrency_spinbox.minimumHeight() >= 36
+
+    # Verify all description and error labels have word wrap enabled
+    assert page._dir_error_label.wordWrap() is True
+    assert page._cookies_error_label.wordWrap() is True
+    assert page._ffmpeg_desc_label.wordWrap() is True
+    assert page._cookies_desc_label.wordWrap() is True
+    assert page._footer_status_label.wordWrap() is True
+
+    # Test saving settings
+    page._dir_input.setText(str(tmp_path))
+    page._concurrency_spinbox.setValue(6)
+    assert page.save_settings() is True
+    assert repo.get(KEY_MAX_CONCURRENT) == "6"
+

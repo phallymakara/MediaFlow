@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -165,87 +166,122 @@ class SettingsPage(QWidget):
         self.load_settings()
 
     def _init_ui(self) -> None:
-        """Construct the settings page layout."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(20)
+        """Construct the settings page layout with smooth scrolling and responsive components."""
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # Scroll area for all configuration sections
+        self._scroll_area = QScrollArea(self)
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+
+        # Scroll content widget
+        content_widget = QWidget()
+        content_widget.setObjectName("settingsScrollContent")
+        content_widget.setStyleSheet("background-color: transparent;")
+
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(32, 24, 32, 28)
+        content_layout.setSpacing(22)
 
         # Header Title & Description
         header_box = QVBoxLayout()
-        header_box.setSpacing(4)
-        title_label = QLabel("Settings", self)
+        header_box.setSpacing(6)
+        title_label = QLabel("Settings", content_widget)
         title_label.setObjectName("pageTitle")
         header_box.addWidget(title_label)
 
         desc_label = QLabel(
             "Configure download storage, network concurrency limits, and media processing engine.",
-            self,
+            content_widget,
         )
         desc_label.setObjectName("secondaryText")
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 13px; line-height: 1.4;")
         header_box.addWidget(desc_label)
-        layout.addLayout(header_box)
+        content_layout.addLayout(header_box)
 
-        layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_divider(content_widget))
 
         # Section 1: Storage & Download Directory
-        sec1_header = QLabel("Storage & Download Directory", self)
+        sec1_header = QLabel("Storage & Download Directory", content_widget)
         sec1_header.setObjectName("sectionHeader")
-        layout.addWidget(sec1_header)
+        sec1_header.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; text-transform: uppercase; "
+            f"color: {COLORS.text_secondary}; letter-spacing: 0.5px;"
+        )
+        content_layout.addWidget(sec1_header)
 
         dir_row = QHBoxLayout()
-        dir_row.setSpacing(8)
+        dir_row.setSpacing(10)
 
-        self._dir_input = QLineEdit(self)
+        self._dir_input = QLineEdit(content_widget)
         self._dir_input.setPlaceholderText("Select download directory...")
+        self._dir_input.setMinimumHeight(38)
         self._dir_input.textChanged.connect(self._clear_inline_errors)
         dir_row.addWidget(self._dir_input, 1)
 
-        browse_dir_btn = QPushButton("Browse...", self)
+        browse_dir_btn = QPushButton("Browse...", content_widget)
         browse_dir_btn.setIcon(create_vector_icon("folder", size=14))
+        browse_dir_btn.setMinimumHeight(38)
         browse_dir_btn.clicked.connect(self._on_browse_directory)
         dir_row.addWidget(browse_dir_btn)
 
-        open_dir_btn = QPushButton("Open Folder", self)
+        open_dir_btn = QPushButton("Open Folder", content_widget)
+        open_dir_btn.setMinimumHeight(38)
         open_dir_btn.clicked.connect(self._on_open_directory)
         dir_row.addWidget(open_dir_btn)
 
-        layout.addLayout(dir_row)
+        content_layout.addLayout(dir_row)
 
-        self._dir_error_label = QLabel(self)
-        self._dir_error_label.setStyleSheet(f"color: {COLORS.status_danger}; font-size: 11px;")
+        self._dir_error_label = QLabel(content_widget)
+        self._dir_error_label.setStyleSheet(f"color: {COLORS.status_danger}; font-size: 12px; font-weight: 500;")
+        self._dir_error_label.setWordWrap(True)
         self._dir_error_label.hide()
-        layout.addWidget(self._dir_error_label)
+        content_layout.addWidget(self._dir_error_label)
 
         dir_hint = QLabel(
             "All downloaded video, audio, and drama series files will be saved into this folder.",
-            self,
+            content_widget,
         )
-        dir_hint.setObjectName("captionText")
-        layout.addWidget(dir_hint)
+        dir_hint.setWordWrap(True)
+        dir_hint.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px; line-height: 1.4;")
+        content_layout.addWidget(dir_hint)
 
-        layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_divider(content_widget))
 
         # Section 2: Concurrency & Performance
-        sec2_header = QLabel("Concurrency & Performance", self)
+        sec2_header = QLabel("Concurrency & Performance", content_widget)
         sec2_header.setObjectName("sectionHeader")
-        layout.addWidget(sec2_header)
+        sec2_header.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; text-transform: uppercase; "
+            f"color: {COLORS.text_secondary}; letter-spacing: 0.5px;"
+        )
+        content_layout.addWidget(sec2_header)
 
         concurrency_row = QHBoxLayout()
         concurrency_row.setSpacing(16)
 
-        concurrency_label = QLabel("Simultaneous Downloads:", self)
+        concurrency_label = QLabel("Simultaneous Downloads:", content_widget)
+        concurrency_label.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {COLORS.text_primary};")
         concurrency_row.addWidget(concurrency_label)
 
-        self._concurrency_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self._concurrency_slider = QSlider(Qt.Orientation.Horizontal, content_widget)
         self._concurrency_slider.setRange(1, 20)
         self._concurrency_slider.setValue(3)
         self._concurrency_slider.setFixedWidth(240)
+        self._concurrency_slider.setMinimumHeight(32)
         concurrency_row.addWidget(self._concurrency_slider)
 
-        self._concurrency_spinbox = QSpinBox(self)
+        self._concurrency_spinbox = QSpinBox(content_widget)
         self._concurrency_spinbox.setRange(1, 20)
         self._concurrency_spinbox.setValue(3)
-        self._concurrency_spinbox.setFixedWidth(70)
+        self._concurrency_spinbox.setFixedWidth(75)
+        self._concurrency_spinbox.setMinimumHeight(38)
         concurrency_row.addWidget(self._concurrency_spinbox)
 
         # Synchronize slider and spinbox
@@ -253,97 +289,120 @@ class SettingsPage(QWidget):
         self._concurrency_spinbox.valueChanged.connect(self._concurrency_slider.setValue)
 
         concurrency_row.addStretch()
-        layout.addLayout(concurrency_row)
+        content_layout.addLayout(concurrency_row)
 
         concurrency_hint = QLabel(
             "Controls the maximum number of simultaneous background downloads (1 to 20).",
-            self,
+            content_widget,
         )
-        concurrency_hint.setObjectName("captionText")
-        layout.addWidget(concurrency_hint)
+        concurrency_hint.setWordWrap(True)
+        concurrency_hint.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px; line-height: 1.4;")
+        content_layout.addWidget(concurrency_hint)
 
-        layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_divider(content_widget))
 
         # Section 3: Media Processing Engine (FFmpeg)
-        sec3_header = QLabel("FFmpeg Media Engine", self)
+        sec3_header = QLabel("FFmpeg Media Engine", content_widget)
         sec3_header.setObjectName("sectionHeader")
-        layout.addWidget(sec3_header)
+        sec3_header.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; text-transform: uppercase; "
+            f"color: {COLORS.text_secondary}; letter-spacing: 0.5px;"
+        )
+        content_layout.addWidget(sec3_header)
 
         ffmpeg_status_row = QHBoxLayout()
         ffmpeg_status_row.setSpacing(10)
-        ffmpeg_lbl = QLabel("Engine Status:", self)
+        ffmpeg_lbl = QLabel("Engine Status:", content_widget)
+        ffmpeg_lbl.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {COLORS.text_primary};")
         ffmpeg_status_row.addWidget(ffmpeg_lbl)
 
-        self._ffmpeg_status_badge = QLabel("Checking...", self)
+        self._ffmpeg_status_badge = QLabel("Checking...", content_widget)
+        self._ffmpeg_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._ffmpeg_status_badge.setMinimumHeight(26)
         self._ffmpeg_status_badge.setStyleSheet(
-            f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+            f"padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 600; "
             f"color: {COLORS.text_muted}; background-color: {COLORS.bg_surface_alt};"
         )
         ffmpeg_status_row.addWidget(self._ffmpeg_status_badge)
 
-        self._ffmpeg_desc_label = QLabel(self)
-        self._ffmpeg_desc_label.setObjectName("captionText")
+        self._ffmpeg_desc_label = QLabel(content_widget)
+        self._ffmpeg_desc_label.setWordWrap(True)
+        self._ffmpeg_desc_label.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px;")
         ffmpeg_status_row.addWidget(self._ffmpeg_desc_label, 1)
 
-        layout.addLayout(ffmpeg_status_row)
+        content_layout.addLayout(ffmpeg_status_row)
 
         ffmpeg_row = QHBoxLayout()
-        ffmpeg_row.setSpacing(8)
+        ffmpeg_row.setSpacing(10)
 
-        self._ffmpeg_input = QLineEdit(self)
-        self._ffmpeg_input.setPlaceholderText("Custom FFmpeg binary path (optional, e.g. C:/ffmpeg/bin/ffmpeg.exe)")
+        self._ffmpeg_input = QLineEdit(content_widget)
+        self._ffmpeg_input.setPlaceholderText("Custom FFmpeg binary path (optional, e.g. /usr/local/bin/ffmpeg)")
+        self._ffmpeg_input.setMinimumHeight(38)
         self._ffmpeg_input.textChanged.connect(self._on_ffmpeg_text_changed)
         ffmpeg_row.addWidget(self._ffmpeg_input, 1)
 
-        browse_ffmpeg_btn = QPushButton("Browse...", self)
+        browse_ffmpeg_btn = QPushButton("Browse...", content_widget)
+        browse_ffmpeg_btn.setMinimumHeight(38)
         browse_ffmpeg_btn.clicked.connect(self._on_browse_ffmpeg)
         ffmpeg_row.addWidget(browse_ffmpeg_btn)
 
-        test_ffmpeg_btn = QPushButton("Test Binary", self)
+        test_ffmpeg_btn = QPushButton("Test Binary", content_widget)
+        test_ffmpeg_btn.setMinimumHeight(38)
         test_ffmpeg_btn.clicked.connect(self._on_test_ffmpeg)
         ffmpeg_row.addWidget(test_ffmpeg_btn)
 
-        layout.addLayout(ffmpeg_row)
+        content_layout.addLayout(ffmpeg_row)
 
         ffmpeg_hint = QLabel(
             "FFmpeg is used to mux high-definition video (1080p, 4K) with separate audio streams.",
-            self,
+            content_widget,
         )
-        ffmpeg_hint.setObjectName("captionText")
-        layout.addWidget(ffmpeg_hint)
+        ffmpeg_hint.setWordWrap(True)
+        ffmpeg_hint.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px; line-height: 1.4;")
+        content_layout.addWidget(ffmpeg_hint)
 
-        layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_divider(content_widget))
 
         # Section 4: Authentication & Cookies (cookies.txt)
-        sec4_header = QLabel("Authentication & Cookies", self)
+        sec4_header = QLabel("Authentication & Cookies", content_widget)
         sec4_header.setObjectName("sectionHeader")
-        layout.addWidget(sec4_header)
+        sec4_header.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; text-transform: uppercase; "
+            f"color: {COLORS.text_secondary}; letter-spacing: 0.5px;"
+        )
+        content_layout.addWidget(sec4_header)
 
         cookies_status_row = QHBoxLayout()
         cookies_status_row.setSpacing(10)
-        cookies_lbl = QLabel("Cookies Status:", self)
+        cookies_lbl = QLabel("Cookies Status:", content_widget)
+        cookies_lbl.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {COLORS.text_primary};")
         cookies_status_row.addWidget(cookies_lbl)
 
-        self._cookies_status_badge = QLabel("Not Configured", self)
+        self._cookies_status_badge = QLabel("Not Configured", content_widget)
+        self._cookies_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cookies_status_badge.setMinimumHeight(26)
         self._cookies_status_badge.setStyleSheet(
-            f"padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; "
+            f"padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 600; "
             f"color: {COLORS.text_muted}; background-color: {COLORS.bg_surface_alt};"
         )
         cookies_status_row.addWidget(self._cookies_status_badge)
 
-        self._cookies_desc_label = QLabel(self)
-        self._cookies_desc_label.setObjectName("captionText")
+        self._cookies_desc_label = QLabel(content_widget)
+        self._cookies_desc_label.setWordWrap(True)
+        self._cookies_desc_label.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px;")
         cookies_status_row.addWidget(self._cookies_desc_label, 1)
 
-        layout.addLayout(cookies_status_row)
+        content_layout.addLayout(cookies_status_row)
 
         # Auto-detect from installed browser
         browser_row = QHBoxLayout()
         browser_row.setSpacing(12)
-        browser_lbl = QLabel("Auto-detect Browser:", self)
+        browser_lbl = QLabel("Auto-detect Browser:", content_widget)
+        browser_lbl.setStyleSheet(f"font-size: 13px; font-weight: 500; color: {COLORS.text_primary};")
         browser_row.addWidget(browser_lbl)
 
-        self._browser_combo = QComboBox(self)
+        self._browser_combo = QComboBox(content_widget)
+        self._browser_combo.setMinimumHeight(38)
         self._browser_combo.addItem("Disabled (Use manual cookies.txt / Off)", "")
         self._browser_combo.addItem("Google Chrome", "chrome")
         self._browser_combo.addItem("Microsoft Edge", "edge")
@@ -353,71 +412,94 @@ class SettingsPage(QWidget):
         self._browser_combo.currentIndexChanged.connect(self._on_browser_changed)
         browser_row.addWidget(self._browser_combo)
         browser_row.addStretch()
-        layout.addLayout(browser_row)
+        content_layout.addLayout(browser_row)
 
-        manual_cookie_lbl = QLabel("Or specify cookies.txt file manually:", self)
-        manual_cookie_lbl.setObjectName("captionText")
-        layout.addWidget(manual_cookie_lbl)
+        manual_cookie_lbl = QLabel("Or specify cookies.txt file manually:", content_widget)
+        manual_cookie_lbl.setWordWrap(True)
+        manual_cookie_lbl.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px;")
+        content_layout.addWidget(manual_cookie_lbl)
 
         cookies_row = QHBoxLayout()
-        cookies_row.setSpacing(8)
+        cookies_row.setSpacing(10)
 
-        self._cookies_input = QLineEdit(self)
+        self._cookies_input = QLineEdit(content_widget)
         self._cookies_input.setPlaceholderText("Path to exported cookies.txt (e.g. ~/Downloads/cookies.txt)")
+        self._cookies_input.setMinimumHeight(38)
         self._cookies_input.textChanged.connect(self._on_cookies_text_changed)
         cookies_row.addWidget(self._cookies_input, 1)
 
-        browse_cookies_btn = QPushButton("Browse...", self)
+        browse_cookies_btn = QPushButton("Browse...", content_widget)
         browse_cookies_btn.setIcon(create_vector_icon("folder", size=14))
+        browse_cookies_btn.setMinimumHeight(38)
         browse_cookies_btn.clicked.connect(self._on_browse_cookies)
         cookies_row.addWidget(browse_cookies_btn)
 
-        clear_cookies_btn = QPushButton("Clear", self)
+        clear_cookies_btn = QPushButton("Clear", content_widget)
+        clear_cookies_btn.setMinimumHeight(38)
         clear_cookies_btn.clicked.connect(self._on_clear_cookies)
         cookies_row.addWidget(clear_cookies_btn)
 
-        layout.addLayout(cookies_row)
+        content_layout.addLayout(cookies_row)
 
-        self._cookies_error_label = QLabel(self)
-        self._cookies_error_label.setStyleSheet(f"color: {COLORS.status_danger}; font-size: 11px;")
+        self._cookies_error_label = QLabel(content_widget)
+        self._cookies_error_label.setStyleSheet(f"color: {COLORS.status_danger}; font-size: 12px; font-weight: 500;")
+        self._cookies_error_label.setWordWrap(True)
         self._cookies_error_label.hide()
-        layout.addWidget(self._cookies_error_label)
+        content_layout.addWidget(self._cookies_error_label)
 
         cookies_hint = QLabel(
             "Auto-detect reads cookies directly from your browser, or specify an exported Netscape cookies.txt to download login-gated TikTok dramas and private videos.",
-            self,
+            content_widget,
         )
-        cookies_hint.setObjectName("captionText")
-        layout.addWidget(cookies_hint)
+        cookies_hint.setWordWrap(True)
+        cookies_hint.setStyleSheet(f"color: {COLORS.text_secondary}; font-size: 12px; line-height: 1.4;")
+        content_layout.addWidget(cookies_hint)
 
-        layout.addStretch(1)
+        content_layout.addStretch(1)
 
-        # Footer Actions
-        layout.addWidget(self._create_divider())
+        self._scroll_area.setWidget(content_widget)
+        root_layout.addWidget(self._scroll_area, 1)
 
-        footer_row = QHBoxLayout()
-        footer_row.setSpacing(12)
+        # Pinned Footer Actions Container
+        footer_container = QWidget(self)
+        footer_container.setObjectName("settingsFooterContainer")
+        footer_container.setStyleSheet(
+            f"QWidget#settingsFooterContainer {{"
+            f"  background-color: {COLORS.bg_surface};"
+            f"  border-top: 1px solid {COLORS.border_subtle};"
+            f"}}"
+        )
+        footer_layout = QHBoxLayout(footer_container)
+        footer_layout.setContentsMargins(32, 14, 32, 16)
+        footer_layout.setSpacing(12)
 
-        save_btn = QPushButton("Save Settings", self)
+        save_btn = QPushButton("Save Settings", footer_container)
         save_btn.setObjectName("primaryButton")
+        save_btn.setMinimumHeight(38)
+        save_btn.setMinimumWidth(130)
         save_btn.clicked.connect(self.save_settings)
-        footer_row.addWidget(save_btn)
+        footer_layout.addWidget(save_btn)
 
-        defaults_btn = QPushButton("Restore Defaults", self)
+        defaults_btn = QPushButton("Restore Defaults", footer_container)
+        defaults_btn.setMinimumHeight(38)
+        defaults_btn.setMinimumWidth(130)
         defaults_btn.clicked.connect(self.restore_defaults)
-        footer_row.addWidget(defaults_btn)
+        footer_layout.addWidget(defaults_btn)
 
-        self._footer_status_label = QLabel(self)
-        self._footer_status_label.setStyleSheet(f"color: {COLORS.status_success}; font-size: 12px; font-weight: 500;")
+        self._footer_status_label = QLabel(footer_container)
+        self._footer_status_label.setStyleSheet(
+            f"color: {COLORS.status_success}; font-size: 12px; font-weight: 500;"
+        )
+        self._footer_status_label.setWordWrap(True)
         self._footer_status_label.hide()
-        footer_row.addWidget(self._footer_status_label)
+        footer_layout.addWidget(self._footer_status_label, 1)
 
-        footer_row.addStretch()
-        layout.addLayout(footer_row)
+        footer_layout.addStretch()
+        root_layout.addWidget(footer_container, 0)
 
-    def _create_divider(self) -> QFrame:
+    def _create_divider(self, parent: Optional[QWidget] = None) -> QFrame:
         """Create a flat 1px subtle divider line."""
-        line = QFrame(self)
+        line = QFrame(parent or self)
         line.setObjectName("dividerLine")
         line.setFrameShape(QFrame.Shape.HLine)
         return line

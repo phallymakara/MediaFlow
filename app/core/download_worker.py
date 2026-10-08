@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -124,10 +125,23 @@ class DownloadWorker:
             if resolved:
                 logger.info("Resolved TikTok short drama URL %s -> %s", self.task.url, resolved)
                 self.task.url = resolved
+        elif "tiktok.com" in self.task.url.lower() and "/video/" in self.task.url.lower():
+            resolved = self._resolve_tiktok_video_url(self.task.url)
+            if resolved:
+                logger.info("Resolved TikTok video URL %s -> %s", self.task.url, resolved)
+                self.task.url = resolved
 
         try:
             if self._is_direct_stream(self.task.url):
                 self._download_direct_stream(temp_path)
+                is_audio = "audio" in (self.task.format_id or "").lower() or (self.task.quality or "").lower().startswith("audio")
+                if is_audio and self.ffmpeg and self.ffmpeg.is_available():
+                    audio_target = temp_path.with_suffix(".mp3")
+                    self.ffmpeg.extract_audio(temp_path, audio_target)
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    temp_path = audio_target
+                    self.task.output_path = self.task.output_path.with_suffix(".mp3")
             else:
                 self._download_ytdlp(temp_path)
 
@@ -155,7 +169,7 @@ class DownloadWorker:
             return None
 
     def _resolve_tiktok_shortdrama_url(self, url: str) -> Optional[str]:
-        """Resolve a TikTok short drama URL to its canonical stream or video URL."""
+        """Resolve a TikTok short drama URL to its direct stream URL."""
         try:
             from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
             extractor = TikTokShortDramaExtractor(enable_syndication_search=False)
@@ -168,25 +182,58 @@ class DownloadWorker:
                 drama_video_data = item.get("dramaInfo", {}).get("DramaVideoData", {}) if isinstance(item.get("dramaInfo"), dict) else {}
                 cur_ep = drama_video_data.get("EpisodeNumber") or idx
                 if cur_ep == target_ep:
+                    video_obj = item.get("video", {}) if isinstance(item.get("video"), dict) else {}
+                    play_addr = video_obj.get("playAddr") or ""
+                    if play_addr and isinstance(play_addr, str) and play_addr.startswith("http"):
+                        return play_addr
+                    bitrate_info = video_obj.get("bitrateInfo") or []
+                    if isinstance(bitrate_info, list):
+                        for br in bitrate_info:
+                            if isinstance(br, dict):
+                                p_addr = br.get("PlayAddr") or br.get("playAddr") or {}
+                                if isinstance(p_addr, dict):
+                                    urls = p_addr.get("UrlList") or p_addr.get("urlList") or []
+                                    for u in urls:
+                                        if isinstance(u, str) and u.startswith("http") and not any(bad in u for bad in ("v16m.", "v16-webapp-prime")):
+                                            return u
                     author = item.get("author", {}).get("uniqueId") or "" if isinstance(item.get("author"), dict) else ""
                     item_id = str(item.get("id") or "")
                     if item_id:
                         author_slug = f"@{author}" if author else "@tiktok"
                         return f"https://www.tiktok.com/{author_slug}/video/{item_id}"
-                    video_obj = item.get("video", {}) if isinstance(item.get("video"), dict) else {}
-                    play_addr = video_obj.get("playAddr") or ""
-                    if play_addr and isinstance(play_addr, str) and play_addr.startswith("http"):
-                        return play_addr
                     break
         except Exception as exc:
             logger.debug("Failed resolving TikTok short drama URL %s: %s", url, exc)
+        return None
+
+    def _resolve_tiktok_video_url(self, url: str) -> Optional[str]:
+        """Resolve a TikTok video URL to a direct stream URL if known or cached."""
+        try:
+            from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
+            match = re.search(r'/video/(\d+)', url)
+            if match:
+                vid_id = match.group(1)
+                stream = TikTokShortDramaExtractor.get_cached_video_stream(vid_id)
+                if stream:
+                    return stream
+        except Exception as exc:
+            logger.debug("Failed resolving TikTok video URL %s: %s", url, exc)
         return None
 
     def _is_direct_stream(self, url: str) -> bool:
         """Determine if URL points directly to an accessible video/audio file."""
         clean_url = url.lower()
         direct_exts = (".mp4", ".webm", ".m3u8", ".mp3", ".m4a", ".aac")
-        return any(clean_url.split("?")[0].endswith(ext) for ext in direct_exts)
+        path_part = clean_url.split("?")[0]
+        if any(path_part.endswith(ext) for ext in direct_exts):
+            return True
+        if any(f"{ext}?" in clean_url for ext in direct_exts):
+            return True
+        if "mime_type=video_mp4" in clean_url or "mime_type=video" in clean_url:
+            return True
+        if any(domain in clean_url for domain in ("tiktokcdn.com", "tiktokv.com", "byteoversea.com", "ibyteimg.com")) and ("/video/" in clean_url or "playaddr" in clean_url):
+            return True
+        return False
 
     def _download_direct_stream(self, temp_path: Path) -> None:
         """Stream direct media or HLS playlist to disk with cancellation support."""
