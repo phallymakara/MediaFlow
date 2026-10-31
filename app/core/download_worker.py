@@ -92,7 +92,29 @@ class DownloadWorker:
         self.ffmpeg = ffmpeg_service
         self.repo = repository
         self._custom_client = http_client is not None
-        self._client = http_client or httpx.Client(follow_redirects=True, timeout=15.0)
+        if http_client:
+            self._client = http_client
+        else:
+            client_cookies = None
+            try:
+                from app.services.cookie_service import CookieService
+
+                client_cookies = CookieService.load_cookie_jar(repo=self.repo)
+            except Exception:
+                pass
+            client_headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            }
+            self._client = httpx.Client(
+                headers=client_headers,
+                cookies=client_cookies,
+                follow_redirects=True,
+                timeout=25.0,
+            )
 
     def execute(self) -> Optional[Path]:
         """Execute the download operation to completion.
@@ -239,6 +261,14 @@ class DownloadWorker:
         """Stream direct media or HLS playlist to disk with cancellation support."""
         logger.debug("Streaming direct media for task %s to %s", self.task.task_id, temp_path)
 
+        cookie_file = None
+        try:
+            from app.services.cookie_service import CookieService
+
+            cookie_file = CookieService.resolve_effective_cookies_file(repo=self.repo)
+        except Exception:
+            pass
+
         is_hls = ".m3u8" in self.task.url.lower().split("?")[0]
         if not self._custom_client or is_hls:
             try:
@@ -259,7 +289,11 @@ class DownloadWorker:
                         self._sync_db_progress()
                         last_sync_time = now
 
-                downloader = AsyncDownloaderService(concurrency=6, ffmpeg_service=self.ffmpeg)
+                downloader = AsyncDownloaderService(
+                    concurrency=6,
+                    ffmpeg_service=self.ffmpeg,
+                    cookie_file=cookie_file,
+                )
                 downloader.download(
                     url=self.task.url,
                     dest_path=temp_path,
@@ -278,8 +312,25 @@ class DownloadWorker:
 
         config = get_config()
         max_bytes = config.max_download_bytes
+        stream_headers = {}
+        clean_url = self.task.url.lower()
+        if any(dom in clean_url for dom in ("tiktok", "byteoversea", "ibyteimg")):
+            stream_headers["Referer"] = "https://www.tiktok.com/"
 
-        with self._client.stream("GET", self.task.url) as response:
+        try:
+            from app.services.cookie_service import CookieService
+
+            cookie_hdr = CookieService.get_cookie_header_for_url(
+                url=self.task.url,
+                cookie_file=cookie_file,
+                repo=self.repo,
+            )
+            if cookie_hdr and "cookie" not in [k.lower() for k in self._client.headers.keys()]:
+                stream_headers["Cookie"] = cookie_hdr
+        except Exception:
+            pass
+
+        with self._client.stream("GET", self.task.url, headers=stream_headers) as response:
             response.raise_for_status()
 
             content_type = response.headers.get("content-type", "").lower()

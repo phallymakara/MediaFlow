@@ -35,15 +35,18 @@ class AsyncDownloaderService:
         self,
         concurrency: int = DEFAULT_CONCURRENCY,
         ffmpeg_service: Optional[FFmpegService] = None,
+        cookie_file: Optional[str] = None,
     ) -> None:
         """Initialize async downloader service.
 
         Args:
             concurrency: Maximum number of concurrent chunk or segment connections.
             ffmpeg_service: Optional FFmpegService for stream concatenation and remuxing.
+            cookie_file: Optional explicit path to Netscape cookies.txt file.
         """
         self.concurrency = max(1, min(concurrency, 16))
         self.ffmpeg = ffmpeg_service or FFmpegService()
+        self.cookie_file = cookie_file
 
     def download(
         self,
@@ -100,8 +103,22 @@ class AsyncDownloaderService:
             ),
             "Accept": "*/*",
         }
-        if "tiktok" in url.lower():
+        clean_url = url.lower()
+        if any(dom in clean_url for dom in ("tiktok", "byteoversea", "ibyteimg")):
             headers["Referer"] = "https://www.tiktok.com/"
+
+        # Attach cookie header if available
+        try:
+            from app.services.cookie_service import CookieService
+
+            cookie_header = CookieService.get_cookie_header_for_url(
+                url=url,
+                cookie_file=self.cookie_file,
+            )
+            if cookie_header:
+                headers["Cookie"] = cookie_header
+        except Exception as exc:
+            logger.debug("Failed resolving cookies for async downloader: %s", exc)
 
         async with aiohttp.ClientSession(
             connector=connector, timeout=timeout, headers=headers

@@ -153,7 +153,7 @@ class CookieService:
             return str(Path(saved_file).resolve())
 
         # 2. Browser cookies auto-detection and caching
-        browser_spec = saved_browser or os.environ.get("MEDIAFLOW_COOKIES_BROWSER") or ""
+        browser_spec = saved_browser or os.environ.get("MEDIAFLOW_COOKIES_BROWSER") or "chrome"
         cache_path = DEFAULT_COOKIE_CACHE_PATH
 
         if browser_spec:
@@ -190,3 +190,43 @@ class CookieService:
                 return str(fb.resolve())
 
         return None
+
+    @staticmethod
+    def load_cookie_jar(
+        cookie_file: Optional[str] = None,
+        repo: Optional[Any] = None,
+    ) -> Optional[Any]:
+        """Load and return a MozillaCookieJar from resolved or provided cookie file."""
+        import http.cookiejar
+
+        cf = cookie_file or CookieService.resolve_effective_cookies_file(repo=repo)
+        if cf and os.path.exists(cf):
+            try:
+                jar = http.cookiejar.MozillaCookieJar(cf)
+                jar.load(ignore_discard=True, ignore_expires=True)
+                return jar
+            except Exception as exc:
+                logger.warning("Failed loading MozillaCookieJar from %s: %s", cf, exc)
+        return None
+
+    @staticmethod
+    def get_cookie_header_for_url(
+        url: str,
+        cookie_file: Optional[str] = None,
+        repo: Optional[Any] = None,
+        jar: Optional[Any] = None,
+    ) -> str:
+        """Extract RFC-compliant Cookie header string matching a target URL."""
+        import urllib.request
+
+        cookie_jar = jar or CookieService.load_cookie_jar(cookie_file=cookie_file, repo=repo)
+        if not cookie_jar:
+            return ""
+        try:
+            req = urllib.request.Request(url)
+            cookie_jar.add_cookie_header(req)
+            return req.get_header("Cookie", "") or req.get_header("cookie", "") or ""
+        except Exception as exc:
+            logger.debug("Failed extracting cookie header for %s: %s", url, exc)
+            return ""
+

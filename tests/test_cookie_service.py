@@ -58,3 +58,34 @@ def test_export_browser_cookies_mocked(tmp_path: Path) -> None:
         assert success is True
         assert dest.exists()
         assert dest.stat().st_size > 50
+
+
+def test_load_cookie_jar_and_header(tmp_path: Path) -> None:
+    """Verify loading MozillaCookieJar and formatting Cookie header for matching URL."""
+    fake_cookie = tmp_path / "cookies.txt"
+    # Netscape format: domain, flag, path, secure, expiration, name, value
+    fake_cookie.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".tiktok.com\tTRUE\t/\tFALSE\t2147483647\ttt_chain_token\ttoken123\n"
+        ".tiktok.com\tTRUE\t/\tFALSE\t2147483647\tsessionid\tsess456\n"
+    )
+
+    jar = CookieService.load_cookie_jar(cookie_file=str(fake_cookie))
+    assert jar is not None
+    assert len(jar) == 2
+
+    # Matching domain and subdomain
+    cookie_header = CookieService.get_cookie_header_for_url(
+        "https://v16-webapp-prime.tiktok.com/video/tos/alisg/",
+        cookie_file=str(fake_cookie),
+    )
+    assert "tt_chain_token=token123" in cookie_header
+    assert "sessionid=sess456" in cookie_header
+
+    # Non-matching domain should produce empty header
+    other_header = CookieService.get_cookie_header_for_url(
+        "https://example.com/test",
+        cookie_file=str(fake_cookie),
+    )
+    assert other_header == ""
+

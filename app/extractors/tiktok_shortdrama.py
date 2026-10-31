@@ -71,12 +71,8 @@ class TikTokShortDramaExtractor(BaseDramaExtractor):
     def _load_cookie_jar() -> Optional[http.cookiejar.MozillaCookieJar]:
         try:
             from app.services.cookie_service import CookieService
-            cf = CookieService.resolve_effective_cookies_file()
-            if cf and os.path.exists(cf):
-                jar = http.cookiejar.MozillaCookieJar(cf)
-                jar.load(ignore_discard=True, ignore_expires=True)
-                logger.debug("Loaded cookie jar for TikTok from %s", cf)
-                return jar
+
+            return CookieService.load_cookie_jar()
         except Exception as exc:
             logger.warning("Failed loading cookie jar for TikTok: %s", exc)
         return None
