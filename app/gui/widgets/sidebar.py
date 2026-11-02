@@ -142,9 +142,10 @@ class Sidebar(QFrame):
 
         nav_items = [
             (0, "Downloader", "downloader"),
-            (1, "History", "history"),
-            (2, "Settings", "settings"),
-            (3, "License", "license"),
+            (1, "Short Dramas", "drama"),
+            (2, "History", "history"),
+            (3, "Settings", "settings"),
+            (4, "License", "license"),
         ]
 
         for index, label, icon_name in nav_items:
@@ -179,7 +180,7 @@ class Sidebar(QFrame):
             }}
             """
         )
-        self._license_widget.clicked.connect(lambda: self._on_nav_clicked(3))
+        self._license_widget.clicked.connect(lambda: self._on_nav_clicked(4))
 
         license_layout = QHBoxLayout(self._license_widget)
         license_layout.setContentsMargins(14, 12, 14, 12)

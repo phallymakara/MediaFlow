@@ -106,6 +106,13 @@ class AsyncDownloaderService:
         clean_url = url.lower()
         if any(dom in clean_url for dom in ("tiktok", "byteoversea", "ibyteimg")):
             headers["Referer"] = "https://www.tiktok.com/"
+        elif any(dom in clean_url for dom in ("crazymaplestudios", "reelshort")):
+            headers["Referer"] = "https://www.reelshort.com/"
+            headers["Origin"] = "https://www.reelshort.com"
+        elif any(dom in clean_url for dom in ("dramabox",)):
+            headers["Referer"] = "https://www.dramabox.com/"
+        elif any(dom in clean_url for dom in ("shortmax",)):
+            headers["Referer"] = "https://www.shortmax.com/"
 
         # Attach cookie header if available
         try:

@@ -41,6 +41,17 @@ from app.services.ffmpeg import FFmpegService
 from app.services.license import LicenseService
 from app.services.storage import StorageService
 
+from app.server import (
+    ROUTES,
+    Req,
+    app,
+    download,
+    health,
+    resolve,
+    set_cookies,
+    site_of,
+)
+
 logger = logging.getLogger("mediaflow")
 
 
@@ -110,12 +121,29 @@ def verify_application() -> int:
 
 
 def main() -> None:
-    """Launch the MediaFlow desktop application."""
-    parser = argparse.ArgumentParser(description="MediaFlow Desktop Media Downloader")
+    """Launch the MediaFlow desktop application or backend API server."""
+    parser = argparse.ArgumentParser(description="MediaFlow Desktop Media Downloader & API Backend")
     parser.add_argument(
         "--verify",
         action="store_true",
         help="Perform headless initialization and schema verification without opening GUI window.",
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Launch the FastAPI backend service instead of the desktop GUI.",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host to bind the backend server (default: 0.0.0.0).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for backend server (default: 8000).",
     )
     parser.add_argument(
         "--log-level",
@@ -130,17 +158,23 @@ def main() -> None:
     if args.verify:
         sys.exit(verify_application())
 
+    if args.server:
+        import uvicorn
+        logger.info("Starting MediaFlow FastAPI backend on %s:%d", args.host, args.port)
+        uvicorn.run(app, host=args.host, port=args.port)
+        return
+
     # Initialize Qt GUI application
-    app = QApplication(sys.argv)
+    qt_app = QApplication(sys.argv)
     if "QT_PLUGIN_PATH" in os.environ:
         QCoreApplication.addLibraryPath(os.environ["QT_PLUGIN_PATH"])
 
-    app.setApplicationName("MediaFlow")
-    app.setOrganizationName("Proseth")
-    app.setWindowIcon(QIcon(get_logo_pixmap(size=32)))
+    qt_app.setApplicationName("MediaFlow")
+    qt_app.setOrganizationName("Proseth")
+    qt_app.setWindowIcon(QIcon(get_logo_pixmap(size=32)))
 
     # Apply global QSS dark theme stylesheet
-    app.setStyleSheet(get_application_stylesheet())
+    qt_app.setStyleSheet(get_application_stylesheet())
 
     # Construct shared singletons
     config = get_config()
@@ -173,7 +207,7 @@ def main() -> None:
     window.show()
 
     logger.info("MediaFlow GUI initialized and running.")
-    sys.exit(app.exec())
+    sys.exit(qt_app.exec())
 
 
 if __name__ == "__main__":

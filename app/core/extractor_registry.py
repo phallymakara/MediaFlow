@@ -5,12 +5,17 @@ from typing import List, Optional, Tuple
 
 from app.core.media import MediaInfo
 from app.extractors.base import BaseExtractor, ExtractionError
+from app.extractors.bilibili import BilibiliExtractor
+from app.extractors.douyin import DouyinExtractor
 from app.extractors.dramabox import DramaBoxExtractor
 from app.extractors.dramawave import DramaWaveExtractor
 from app.extractors.flickreels import FlickReelsExtractor
 from app.extractors.freereels import FreeReelsExtractor
 from app.extractors.goodshort import GoodShortExtractor
+from app.extractors.kuaishou import KuaishouExtractor
 from app.extractors.netshort import NetShortExtractor
+from app.extractors.reelshort import ReelShortExtractor
+from app.extractors.shortmax import ShortMaxExtractor
 from app.extractors.stardusttv import StardustTVExtractor
 from app.extractors.tiktok_shortdrama import TikTokShortDramaExtractor
 from app.extractors.ytdlp import YtDlpExtractor
@@ -129,7 +134,10 @@ def get_default_registry() -> ExtractorRegistry:
     """
     registry = ExtractorRegistry()
 
-    # Register custom short drama extractors with high priority (20-26)
+    # Register dedicated extractors with high priority (15-29)
+    registry.register(DouyinExtractor(), priority=15)
+    registry.register(KuaishouExtractor(), priority=16)
+    registry.register(BilibiliExtractor(), priority=17)
     registry.register(DramaBoxExtractor(), priority=20)
     registry.register(NetShortExtractor(), priority=21)
     registry.register(FlickReelsExtractor(), priority=22)
@@ -138,6 +146,8 @@ def get_default_registry() -> ExtractorRegistry:
     registry.register(DramaWaveExtractor(), priority=25)
     registry.register(FreeReelsExtractor(), priority=26)
     registry.register(TikTokShortDramaExtractor(), priority=27)
+    registry.register(ReelShortExtractor(), priority=28)
+    registry.register(ShortMaxExtractor(), priority=29)
 
     # Register yt-dlp as universal fallback with default priority (100)
     registry.register(YtDlpExtractor(), priority=100)

@@ -280,6 +280,13 @@ class DownloaderPage(QWidget):
         self._url_input.style().unpolish(self._url_input)
         self._url_input.style().polish(self._url_input)
 
+    def load_and_analyze_url(self, url: str) -> None:
+        """Populate the input line and trigger media analysis."""
+        if not url:
+            return
+        self._url_input.setText(url.strip())
+        self._on_add_download_clicked()
+
     def _on_add_download_clicked(self) -> None:
         """Trigger asynchronous media extraction with an interactive loading popup dialog."""
         url = self._url_input.text().strip()
@@ -322,14 +329,22 @@ class DownloaderPage(QWidget):
     def _on_analysis_success(self, media_info: MediaInfo) -> None:
         """Handle resolved metadata and enqueue single download or drama episodes."""
         if self._loading_dialog:
-            self._loading_dialog.accept()
+            dlg = self._loading_dialog
             self._loading_dialog = None
+            try:
+                dlg.close()
+                dlg.deleteLater()
+            except Exception:
+                pass
 
         selected_format = self._format_combo.currentText()
 
         # Handle Short Drama multi-episode series
         if media_info.episodes and len(media_info.episodes) > 1:
             dialog = EpisodePickerDialog(media_info=media_info, parent=self)
+            dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dialog.raise_()
+            dialog.activateWindow()
             if dialog.exec():
                 selected_eps: List[MediaEpisode] = dialog.get_selected_episodes()
                 chosen_format = dialog.get_selected_format()
@@ -357,7 +372,21 @@ class DownloaderPage(QWidget):
                     )
 
                 self._url_input.clear()
-            return
+                return
+            else:
+                # If dialog was dismissed or closed, enqueue the primary target episode
+                # so the download is not lost
+                video_folder = StorageService.generate_media_folder_name(media_info.title)
+                self._enqueue_task(
+                    url=media_info.url,
+                    title=media_info.title,
+                    platform=media_info.platform,
+                    format_str=selected_format,
+                    thumbnail_url=media_info.thumbnail_url,
+                    subfolder=video_folder,
+                )
+                self._url_input.clear()
+                return
 
         # Single media download: enqueue task and insert row into table
         video_folder = StorageService.generate_media_folder_name(media_info.title)

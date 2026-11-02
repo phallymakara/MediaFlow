@@ -197,6 +197,20 @@ def create_vector_image(icon_name: str, color: Optional[str] = None, size: int =
         shield.closeSubpath()
         painter.drawPath(shield)
 
+    elif icon_name == "drama":
+        # Film clapperboard / drama reel geometry
+        rect = QRectF(margin, margin, w, h)
+        painter.drawRoundedRect(rect, 3, 3)
+        painter.drawLine(QPointF(margin, margin + h * 0.35), QPointF(margin + w, margin + h * 0.35))
+        painter.drawLine(QPointF(margin + w * 0.32, margin), QPointF(margin + w * 0.22, margin + h * 0.35))
+        painter.drawLine(QPointF(margin + w * 0.72, margin), QPointF(margin + w * 0.62, margin + h * 0.35))
+        play_path = QPainterPath()
+        play_path.moveTo(margin + w * 0.42, margin + h * 0.50)
+        play_path.lineTo(margin + w * 0.66, margin + h * 0.67)
+        play_path.lineTo(margin + w * 0.42, margin + h * 0.84)
+        play_path.closeSubpath()
+        painter.fillPath(play_path, QBrush(stroke_color))
+
     elif icon_name == "folder":
         # Minimal folder outline
         folder = QPainterPath()

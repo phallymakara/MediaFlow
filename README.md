@@ -121,6 +121,10 @@ mediaflow/
 
 4. Run the application:
    ```bash
+   uv run mediaflow
+   ```
+   Or via python module:
+   ```bash
    uv run python -m app.main
    ```
 

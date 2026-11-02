@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx[http2]
+cryptography
+m3u8
+mini-racer
+playwright
+tenacity
+pydantic-settings
+

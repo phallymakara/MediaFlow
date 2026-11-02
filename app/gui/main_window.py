@@ -19,6 +19,7 @@ from app.database.database import DatabaseManager
 from app.database.repository import DownloadRepository, SettingsRepository
 from app.gui.assets import get_logo_pixmap
 from app.gui.downloader_page import DownloaderPage
+from app.gui.drama_page import ShortDramaPage
 from app.gui.history_page import HistoryPage
 from app.gui.license_page import LicensePage
 from app.gui.settings_page import KEY_DOWNLOAD_DIR, SettingsPage
@@ -109,14 +110,18 @@ class MainWindow(QMainWindow):
         )
         self._stack.addWidget(self._downloader_page)
 
-        # Page 1: History
+        # Page 1: Short Dramas
+        self._drama_page = ShortDramaPage(parent=self)
+        self._stack.addWidget(self._drama_page)
+
+        # Page 2: History
         self._history_page = HistoryPage(
             repository=self.download_repo,
             parent=self,
         )
         self._stack.addWidget(self._history_page)
 
-        # Page 2: Settings
+        # Page 3: Settings
         self._settings_page = SettingsPage(
             repository=self.settings_repo,
             downloader=self.downloader,
@@ -124,7 +129,7 @@ class MainWindow(QMainWindow):
         )
         self._stack.addWidget(self._settings_page)
 
-        # Page 3: License
+        # Page 4: License
         self._license_page = LicensePage(
             license_service=self.license_service,
             parent=self,
@@ -142,11 +147,20 @@ class MainWindow(QMainWindow):
         # Navigation
         self._sidebar.page_changed.connect(self._on_page_changed)
 
+        # Short drama direct download request
+        self._drama_page.request_download.connect(self._on_drama_request_download)
+
         # License updates reflect immediately on sidebar
         self._license_page.license_updated.connect(self._sidebar.update_license_display)
 
         # Settings save updates storage directory and config
         self._settings_page.settings_saved.connect(self._on_settings_saved)
+
+    def _on_drama_request_download(self, url: str) -> None:
+        """Handle download request from Drama Explorer by redirecting to Downloader."""
+        self._sidebar.set_active_page(0)
+        self._stack.setCurrentIndex(0)
+        self._downloader_page.load_and_analyze_url(url)
 
     def _on_page_changed(self, index: int) -> None:
         """Handle page switching and perform page-specific refresh.
@@ -156,8 +170,10 @@ class MainWindow(QMainWindow):
         """
         self._stack.setCurrentIndex(index)
         if index == 1:
+            self._drama_page.refresh_catalog_if_needed()
+        elif index == 2:
             self._history_page.reload_history()
-        elif index == 3:
+        elif index == 4:
             self._license_page.refresh_status()
 
     def _on_settings_saved(self, payload: dict) -> None:
@@ -178,6 +194,11 @@ class MainWindow(QMainWindow):
             event: Window close event.
         """
         logger.info("MainWindow closing, initiating graceful downloader shutdown...")
+        if hasattr(self, "_drama_page") and hasattr(self._drama_page, "closeEvent"):
+            try:
+                self._drama_page.close()
+            except Exception:
+                pass
         if self.downloader:
             try:
                 self.downloader.shutdown(wait=False)

@@ -194,6 +194,15 @@ class FFmpegService:
             logger.error("FFmpeg remux to MP4 failed: %s", exc.stderr)
             raise FFmpegError("Failed to remux media file to MP4.") from exc
 
+    def remux(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> bool:
+        """Alias for remux_to_mp4 for stream processors."""
+        return self.remux_to_mp4(input_path, output_path)
+
+
 
     def extract_audio(
         self,

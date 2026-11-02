@@ -36,7 +36,8 @@ class EpisodePickerDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle("Select Episodes to Download")
-        self.setMinimumSize(480, 520)
+        self.setMinimumSize(500, 520)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Dialog)
         self.setStyleSheet(f"background-color: {COLORS.bg_window}; color: {COLORS.text_primary};")
 
         self.media_info = media_info

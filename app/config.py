@@ -64,6 +64,34 @@ class AppConfig:
         )
 
 
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    UA_PC: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    UA_MOBILE: str = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+    )
+    UA_ANDROID: str = (
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    )
+
+    PROXY: str | None = None          # "http://user:pass@host:port"
+    CONCURRENCY: int = 8
+    SEGMENT_RETRIES: int = 5
+    OUT_DIR: str = "./downloads"
+    COOKIE_FILE: str = "./cookies.json"
+    FFMPEG: str = "ffmpeg"
+
+
+settings = Settings()
+
+
 def get_config() -> AppConfig:
     """Return the active application configuration instance."""
     return AppConfig.from_env()

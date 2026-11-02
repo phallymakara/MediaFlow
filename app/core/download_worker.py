@@ -62,7 +62,7 @@ def resolve_ytdlp_format(format_spec: Optional[str]) -> str:
         return "bestvideo+bestaudio/best"
 
     return "bestvideo+bestaudio/best"
-
+              
     # For any unrecognized or custom format identifier, try it first then fallback to best
     return f"{spec}/bestvideo+bestaudio/best"
 
